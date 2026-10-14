@@ -1,0 +1,824 @@
+# CloudTrap AI — Shared Data Model
+
+**Status:** Proposed MVP data model
+**Database:** PostgreSQL 17
+**Backend:** Java 21, Spring Boot, Spring Data JPA/Hibernate
+**Identifier strategy:** UUID
+**API contract:** `docs/api-design.md`
+**Ownership:** Shared contract; implementation split by feature area
+
+---
+
+## 1. Purpose and design principles
+
+This document defines the canonical entities, fields, relationships, constraints, and persistence conventions for CloudTrap AI.
+
+CloudTrap AI is a cloud security posture management application that inventories cloud assets, detects security misconfigurations, calculates deterministic risk scores, visualizes potential attack paths, and provides remediation guidance.
+
+The MVP must work with synthetic demo data without requiring AWS credentials.
+
+### Core principles
+
+1. PostgreSQL is the source of truth for persisted application data.
+2. The backend validates all input and calculates risk scores.
+3. Deterministic rule findings must remain distinguishable from AI-suggested findings.
+4. AI-generated explanations must never silently overwrite deterministic findings, severity, or risk scores.
+5. Every workspace-owned resource must be authorized against the authenticated user's workspace membership.
+6. Asset relationships and attack paths must use explicit, persisted relationship data.
+7. Database constraints and indexes must protect data integrity and support the expected API queries.
+8. AWS integration is a later read-only capability, not a requirement for the initial demo.
+9. Store timestamps in PostgreSQL using `TIMESTAMPTZ`; expose them as ISO 8601 UTC strings.
+10. Use database migrations for schema evolution. Do not rely on Hibernate schema auto-update in production.
+
+---
+
+## 2. Entity overview
+
+The canonical MVP model contains these entities:
+
+| Entity | Purpose |
+|---|---|
+| `User` | Authenticated application user |
+| `Workspace` | Security boundary for a team or organization |
+| `WorkspaceMembership` | Connects users to workspaces and defines their roles |
+| `CloudAccount` | Represents a cloud account or synthetic demo environment |
+| `Asset` | A cloud resource discovered or loaded from a dataset |
+| `AssetRelationship` | A directed relationship between two assets |
+| `Scan` | One execution of the security analysis pipeline |
+| `ScanAsset` | Records which assets were included in a scan |
+| `SecurityRule` | Versioned deterministic detection rule |
+| `Finding` | A security issue detected during a scan |
+| `RiskAssessment` | Versioned risk score and its contributing factors |
+| `Remediation` | Structured remediation guidance for a finding |
+| `AttackPath` | A bounded path through related assets and security findings |
+| `AIExplanation` | A separately persisted AI-generated explanation |
+| `AuditEvent` | Security-relevant application activity |
+
+Use these names consistently across entity classes, repositories, services, DTOs, and documentation.
+
+---
+
+## 3. Shared conventions
+
+### 3.1 Identifiers
+
+- Use UUID primary keys for persisted entities.
+- Use Java `UUID` for entity identifiers.
+- Serialize UUIDs as strings in JSON.
+- Generate identifiers on the backend, not from client-supplied IDs.
+- Use a stable external identifier separately from the internal UUID when identifying cloud resources.
+
+### 3.2 Timestamps
+
+Use `Instant` in Java for timestamps representing points in time and PostgreSQL `TIMESTAMPTZ` for storage.
+
+Common fields:
+
+- `createdAt`: creation time.
+- `updatedAt`: last modification time.
+
+Set timestamps on the server. Update `updatedAt` whenever the corresponding record changes.
+
+Entity-specific timestamps such as `startedAt`, `completedAt`, `resolvedAt`, and `calculatedAt` must be nullable when the event has not occurred.
+
+### 3.3 Naming
+
+- Java entity and enum names use PascalCase.
+- Java fields use camelCase.
+- PostgreSQL table and column names use snake_case.
+- JSON fields use camelCase.
+- Enum values are uppercase strings.
+- Database primary keys use `id`; foreign keys use names such as `workspace_id` and `asset_id`.
+
+### 3.4 JSONB
+
+Use PostgreSQL `JSONB` only for genuinely variable structured data, such as asset attributes, finding evidence, risk factors, graph snapshots, and AI output.
+
+Do not put core relationships, access-control rules, lifecycle status, or frequently filtered fields exclusively inside JSONB.
+
+Validate JSON structure in the backend. Never store passwords, session secrets, or cloud credentials in these fields.
+
+---
+
+## 4. Entity definitions
+
+### 4.1 User
+
+**Purpose:** Represents a person who can authenticate to CloudTrap AI.
+
+**Table:** `users`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `email` | VARCHAR(254) | Yes | Normalized email address |
+| `display_name` | VARCHAR(120) | Yes | User-facing name |
+| `password_hash` | VARCHAR(255) | Yes for local-password auth | Password hash generated by a suitable password-hashing algorithm |
+| `status` | UserStatus | Yes | Account lifecycle state |
+| `created_at` | TIMESTAMPTZ | Yes | Creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+| `last_login_at` | TIMESTAMPTZ | No | Last successful login |
+
+**Constraints:**
+
+- Enforce uniqueness on normalized `email`.
+- Normalize email consistently before lookup and storage.
+- Never return `password_hash` in an API response.
+- Never log passwords, password hashes, or authentication secrets.
+- If external identity providers are introduced, model external identities explicitly rather than storing provider tokens in the user record.
+
+`UserStatus`:
+
+- `ACTIVE`
+- `DISABLED`
+
+### 4.2 Workspace
+
+**Purpose:** Provides the ownership and authorization boundary for security data.
+
+**Table:** `workspaces`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `name` | VARCHAR(160) | Yes | Workspace name |
+| `slug` | VARCHAR(100) | Yes | Stable, unique workspace identifier |
+| `status` | WorkspaceStatus | Yes | Workspace lifecycle state |
+| `created_at` | TIMESTAMPTZ | Yes | Creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`WorkspaceStatus`:
+
+- `ACTIVE`
+- `DISABLED`
+
+A user can belong to more than one workspace. Every workspace-owned query must be scoped to a workspace the authenticated user is authorized to access.
+
+### 4.3 WorkspaceMembership
+
+**Purpose:** Connects users to workspaces and defines their permissions.
+
+**Table:** `workspace_memberships`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `workspace_id` | UUID | Yes | FK to `workspaces.id` |
+| `user_id` | UUID | Yes | FK to `users.id` |
+| `role` | WorkspaceRole | Yes | Membership role |
+| `created_at` | TIMESTAMPTZ | Yes | Membership creation time |
+
+`WorkspaceRole`:
+
+- `OWNER`
+- `ADMIN`
+- `ANALYST`
+- `VIEWER`
+
+**Constraints:**
+
+- Unique constraint on `(workspace_id, user_id)`.
+- Only authorized owners or administrators can manage membership.
+- `VIEWER` must not be permitted to change finding status or configuration.
+- Every write operation must enforce role permissions server-side.
+
+The exact permissions for each role must be implemented in the authorization layer and covered by tests.
+
+### 4.4 CloudAccount
+
+**Purpose:** Represents the source environment from which assets are collected. A synthetic demo environment is valid even when no real cloud account is connected.
+
+**Table:** `cloud_accounts`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `workspace_id` | UUID | Yes | FK to workspace |
+| `name` | VARCHAR(160) | Yes | Friendly account/environment name |
+| `provider` | CloudProvider | Yes | Cloud provider or demo source |
+| `external_account_id` | VARCHAR(255) | No | Provider-assigned account identifier |
+| `region` | VARCHAR(100) | No | Default region, if applicable |
+| `status` | CloudAccountStatus | Yes | Account state |
+| `created_at` | TIMESTAMPTZ | Yes | Creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`CloudProvider`:
+
+- `DEMO`
+- `AWS`
+
+`CloudAccountStatus`:
+
+- `ACTIVE`
+- `DISABLED`
+
+**Constraints:**
+
+- Index `workspace_id`.
+- Enforce uniqueness on `(workspace_id, provider, external_account_id)` when the external identifier is non-null.
+- Do not persist AWS access keys or secret keys in this entity.
+- A demo account must not be represented as a verified AWS account.
+
+### 4.5 Asset
+
+**Purpose:** Represents a cloud resource or synthetic resource in the inventory.
+
+**Table:** `assets`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Internal primary key |
+| `workspace_id` | UUID | Yes | FK to workspace |
+| `cloud_account_id` | UUID | Yes | FK to cloud account |
+| `external_asset_id` | VARCHAR(512) | Yes | Stable identifier from its source |
+| `name` | VARCHAR(255) | Yes | Display name |
+| `asset_type` | VARCHAR(100) | Yes | Resource type, such as `S3_BUCKET` or `EC2_INSTANCE` |
+| `provider` | CloudProvider | Yes | Source provider |
+| `region` | VARCHAR(100) | No | Resource region |
+| `exposure` | AssetExposure | Yes | Public/private/unknown exposure classification |
+| `lifecycle_status` | AssetLifecycleStatus | Yes | Resource lifecycle state |
+| `attributes` | JSONB | Yes | Sanitized, provider-specific attributes |
+| `first_seen_at` | TIMESTAMPTZ | Yes | First observed time |
+| `last_seen_at` | TIMESTAMPTZ | Yes | Most recent observation time |
+| `created_at` | TIMESTAMPTZ | Yes | Record creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`AssetExposure` must match the API contract:
+
+- `PUBLIC`
+- `PRIVATE`
+- `UNKNOWN`
+
+`AssetLifecycleStatus`:
+
+- `ACTIVE`
+- `INACTIVE`
+- `DELETED`
+- `UNKNOWN`
+
+**Constraints:**
+
+- Unique constraint on `(cloud_account_id, external_asset_id)`.
+- Index `(workspace_id, asset_type)`.
+- Index `(workspace_id, exposure)`.
+- Index `(cloud_account_id, last_seen_at)`.
+- Verify that the referenced cloud account belongs to the same workspace.
+- Sanitize `attributes` before persistence and API serialization.
+- Never store secret values, access tokens, private keys, or other credentials in asset attributes.
+
+The database should retain internal UUIDs even when the same external resource identifier is used across separate cloud accounts.
+
+### 4.6 AssetRelationship
+
+**Purpose:** Represents a directed relationship between two assets. Relationships support graph visualization and attack-path analysis.
+
+**Table:** `asset_relationships`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `workspace_id` | UUID | Yes | FK to workspace |
+| `source_asset_id` | UUID | Yes | FK to source asset |
+| `target_asset_id` | UUID | Yes | FK to target asset |
+| `relationship_type` | VARCHAR(100) | Yes | Relationship classification |
+| `source_type` | RelationshipSourceType | Yes | How the relationship was obtained |
+| `confidence` | NUMERIC(4,3) | No | Confidence between 0 and 1 when applicable |
+| `evidence` | JSONB | Yes | Structured supporting evidence |
+| `created_at` | TIMESTAMPTZ | Yes | Creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`RelationshipSourceType`:
+
+- `DEMO_DATA`
+- `PROVIDER_DATA`
+- `INFERRED`
+
+**Constraints:**
+
+- Source and target assets must belong to the same workspace as the relationship.
+- Source and target must not be the same asset unless a future use case explicitly requires self-references.
+- Add a uniqueness constraint appropriate to the relationship identity, initially `(source_asset_id, target_asset_id, relationship_type)`.
+- Index `(workspace_id, source_asset_id)` and `(workspace_id, target_asset_id)`.
+- Validate `confidence` between 0 and 1 when supplied.
+
+Examples of relationship types include `CAN_ACCESS`, `HOSTS`, `CONNECTS_TO`, and `ASSUMES_ROLE`. These are illustrative domain values, not additional enum requirements.
+
+### 4.7 Scan
+
+**Purpose:** Represents one execution of the asset-analysis pipeline against an allowed dataset or source.
+
+**Table:** `scans`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `workspace_id` | UUID | Yes | FK to workspace |
+| `cloud_account_id` | UUID | Yes | FK to source account/environment |
+| `requested_by_user_id` | UUID | No | FK to requesting user |
+| `source` | ScanSource | Yes | Scan source |
+| `dataset_id` | VARCHAR(160) | No | Configured dataset identifier for demo scans |
+| `status` | ScanStatus | Yes | Processing state |
+| `started_at` | TIMESTAMPTZ | No | Processing start time |
+| `completed_at` | TIMESTAMPTZ | No | Completion time |
+| `assets_scanned` | INTEGER | Yes | Number of assets processed |
+| `findings_created` | INTEGER | Yes | Number of findings produced by this scan |
+| `findings_by_severity` | JSONB | Yes | Counts by severity |
+| `error_code` | VARCHAR(100) | No | Safe machine-readable failure code |
+| `error_message` | VARCHAR(500) | No | Safe user-facing failure message |
+| `created_at` | TIMESTAMPTZ | Yes | Request creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last state update |
+
+`ScanStatus` must match the API contract:
+
+- `QUEUED`
+- `RUNNING`
+- `COMPLETED`
+- `FAILED`
+
+`ScanSource`:
+
+- `DEMO`
+- `AWS`
+
+**Constraints:**
+
+- Counts must be non-negative.
+- `completed_at` must be set when the scan reaches a terminal state.
+- A scan must not become `COMPLETED` until its results are successfully persisted.
+- A failed scan must contain a safe error code; internal exception details belong only in appropriately protected server logs.
+- The `cloud_account_id` must belong to the same workspace.
+- `dataset_id` must reference an allowed configured dataset when `source = DEMO`; never accept an arbitrary filesystem path.
+
+Index `(workspace_id, created_at)` and `(workspace_id, status)`.
+
+### 4.8 ScanAsset
+
+**Purpose:** Records which assets were included in a particular scan, preserving scan scope even when inventory changes later.
+
+**Table:** `scan_assets`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `scan_id` | UUID | Yes | FK to scan |
+| `asset_id` | UUID | Yes | FK to asset |
+| `created_at` | TIMESTAMPTZ | Yes | Association creation time |
+
+Use `(scan_id, asset_id)` as the composite primary key.
+
+Validate that the scan and asset belong to the same workspace and that the asset belongs to the scan's cloud account or an explicitly permitted scan scope.
+
+### 4.9 SecurityRule
+
+**Purpose:** Stores metadata about deterministic detection rules and their versions.
+
+**Table:** `security_rules`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `rule_id` | VARCHAR(100) | Yes | Stable identifier such as `AWS_STORAGE_PUBLIC_ACCESS` |
+| `version` | INTEGER | Yes | Positive rule version |
+| `title` | VARCHAR(200) | Yes | Rule title |
+| `description` | TEXT | Yes | What the rule detects |
+| `category` | VARCHAR(100) | Yes | Security category |
+| `default_severity` | FindingSeverity | Yes | Default rule severity |
+| `enabled` | BOOLEAN | Yes | Whether the rule is enabled |
+| `definition` | JSONB | No | Validated rule metadata/configuration |
+| `created_at` | TIMESTAMPTZ | Yes | Creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+**Constraints:**
+
+- Unique constraint on `(rule_id, version)`.
+- `version` must be greater than zero.
+- Existing rule versions should be immutable once referenced by findings.
+- Rule execution must use validated, application-controlled definitions. Do not execute arbitrary expressions or code supplied through an API.
+- Rule metadata must identify the logic version used to produce a finding.
+
+The initial MVP may load rules from version-controlled application configuration and seed their metadata into PostgreSQL. Avoid introducing a user-facing rule editor until it is needed.
+
+### 4.10 Finding
+
+**Purpose:** Represents a security issue detected during a scan. It stores the detection result, provenance, evidence, workflow state, and a reference to the relevant risk assessment.
+
+**Table:** `findings`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `workspace_id` | UUID | Yes | FK to workspace |
+| `scan_id` | UUID | Yes | FK to originating scan |
+| `asset_id` | UUID | Yes | FK to affected asset |
+| `security_rule_id` | UUID | No | FK to the versioned rule; null for an unvalidated AI suggestion |
+| `rule_id` | VARCHAR(100) | No | Stable rule identifier snapshot |
+| `rule_version` | INTEGER | No | Rule version snapshot |
+| `source_type` | FindingSourceType | Yes | Deterministic or AI-suggested provenance |
+| `title` | VARCHAR(240) | Yes | Short finding title |
+| `description` | TEXT | Yes | Finding description |
+| `category` | VARCHAR(100) | Yes | Security category |
+| `severity` | FindingSeverity | Yes | Severity assigned by validated detection logic |
+| `status` | FindingStatus | Yes | Workflow state |
+| `evidence` | JSONB | Yes | Structured evidence supporting the finding |
+| `detected_at` | TIMESTAMPTZ | Yes | Time the issue was detected |
+| `resolved_at` | TIMESTAMPTZ | No | Time the issue was marked resolved |
+| `created_at` | TIMESTAMPTZ | Yes | Record creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`FindingSeverity`:
+
+- `CRITICAL`
+- `HIGH`
+- `MEDIUM`
+- `LOW`
+- `INFO`
+
+`FindingStatus` must match the API contract:
+
+- `OPEN`
+- `ACKNOWLEDGED`
+- `RESOLVED`
+- `ACCEPTED_RISK`
+
+`FindingSourceType`:
+
+- `DETERMINISTIC_RULE`
+- `AI_SUGGESTED`
+
+**Constraints and behavior:**
+
+- The scan, asset, and finding must belong to the same workspace.
+- For deterministic findings, require a valid security rule reference and a rule/version snapshot.
+- AI-suggested findings must be labelled as such and must not be presented as confirmed deterministic detections.
+- Enforce valid severity and status values.
+- Set `resolved_at` when a finding becomes `RESOLVED`; clear it if the finding is reopened through a future explicitly supported transition.
+- Do not hard-delete findings as part of normal workflow.
+- Preserve the originating scan and rule-version information for auditability.
+- Avoid a global uniqueness constraint on `(asset_id, rule_id)`: the same issue may be observed in different scans.
+
+Indexes:
+
+- `(workspace_id, status, severity)`
+- `(workspace_id, detected_at)`
+- `(scan_id)`
+- `(asset_id)`
+- `(security_rule_id)`
+
+### 4.11 RiskAssessment
+
+**Purpose:** Stores the risk score and the exact scoring metadata used to calculate it.
+
+**Table:** `risk_assessments`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `finding_id` | UUID | Yes | FK to finding |
+| `score` | SMALLINT | Yes | Integer risk score from 0 to 100 |
+| `severity` | FindingSeverity | Yes | Severity associated with this assessment |
+| `factors` | JSONB | Yes | Structured factor values and contributions |
+| `formula_version` | VARCHAR(50) | Yes | Version of the scoring algorithm |
+| `calculated_at` | TIMESTAMPTZ | Yes | Calculation time |
+| `created_at` | TIMESTAMPTZ | Yes | Record creation time |
+
+**Constraints and behavior:**
+
+- Enforce `score BETWEEN 0 AND 100`.
+- `formula_version` must be explicit, such as `risk-v1`.
+- Factor values and contributions must represent the actual algorithm; do not fabricate factors or assume contributions sum to the final score unless the formula defines that property.
+- Recalculate scores only through backend-controlled scoring logic.
+- Preserve previous assessments when recalculation history is needed.
+- The current assessment must be unambiguous for a finding.
+
+For the MVP, keep assessment history and query the latest assessment using `calculated_at` and a deterministic tie-breaker, or introduce a current-assessment pointer. Do not allow multiple records to be treated as the current score.
+
+The API's risk object should expose the current score, severity, factors, formula version, and calculation timestamp.
+
+### 4.12 Remediation
+
+**Purpose:** Stores actionable remediation guidance associated with a finding.
+
+**Table:** `remediations`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `finding_id` | UUID | Yes | FK to finding |
+| `summary` | VARCHAR(500) | Yes | Short remediation recommendation |
+| `steps` | JSONB | Yes | Ordered, structured remediation steps |
+| `priority` | RemediationPriority | Yes | Suggested remediation priority |
+| `source_type` | RemediationSourceType | Yes | Origin of guidance |
+| `requires_human_review` | BOOLEAN | Yes | Whether a human must validate the recommendation |
+| `created_at` | TIMESTAMPTZ | Yes | Creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`RemediationPriority`:
+
+- `CRITICAL`
+- `HIGH`
+- `MEDIUM`
+- `LOW`
+
+`RemediationSourceType`:
+
+- `RULE`
+- `AI`
+- `MANUAL`
+
+A finding may have multiple remediation versions over time. Keep one clearly identified current recommendation in application logic, or add an explicit version/current marker before implementing multiple active recommendations.
+
+Remediation guidance is advisory. The MVP must not automatically change cloud configuration or execute remediation commands against real infrastructure.
+
+### 4.13 AttackPath
+
+**Purpose:** Represents a bounded, explainable candidate path through assets and security issues. It supports graph visualization without replacing the underlying asset relationships.
+
+**Table:** `attack_paths`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `workspace_id` | UUID | Yes | FK to workspace |
+| `scan_id` | UUID | Yes | FK to scan used for analysis |
+| `title` | VARCHAR(240) | Yes | Human-readable path title |
+| `description` | TEXT | No | Path explanation |
+| `risk_score` | SMALLINT | Yes | Path risk score from 0 to 100 |
+| `status` | AttackPathStatus | Yes | Candidate path state |
+| `path_data` | JSONB | Yes | Ordered node and edge references |
+| `calculated_at` | TIMESTAMPTZ | Yes | Analysis time |
+| `created_at` | TIMESTAMPTZ | Yes | Creation time |
+| `updated_at` | TIMESTAMPTZ | Yes | Last update time |
+
+`AttackPathStatus`:
+
+- `CANDIDATE`
+- `REVIEWED`
+- `DISMISSED`
+
+**Constraints and behavior:**
+
+- Enforce `risk_score BETWEEN 0 AND 100`.
+- The referenced scan must belong to the same workspace.
+- `path_data` must contain ordered references to persisted assets and relationships, and optionally relevant finding IDs.
+- Validate every referenced node, edge, and finding against the same workspace and scan scope.
+- Bound path length and result count to avoid unbounded graph traversal.
+- Explain why the path is considered risky; do not label an inferred path as a confirmed exploit.
+- Keep the underlying `AssetRelationship` records as the source of graph connectivity.
+
+### 4.14 AIExplanation
+
+**Purpose:** Stores a validated AI-generated explanation or contextual summary for a finding.
+
+**Table:** `ai_explanations`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `workspace_id` | UUID | Yes | FK to workspace |
+| `finding_id` | UUID | Yes | FK to finding |
+| `provider` | VARCHAR(80) | Yes | AI provider identifier |
+| `model` | VARCHAR(160) | Yes | Model identifier |
+| `prompt_version` | VARCHAR(50) | Yes | Prompt/template version |
+| `content` | TEXT | Yes | Validated explanation |
+| `structured_output` | JSONB | No | Validated structured response |
+| `status` | AIExplanationStatus | Yes | Processing result |
+| `created_at` | TIMESTAMPTZ | Yes | Creation time |
+
+`AIExplanationStatus`:
+
+- `COMPLETED`
+- `FAILED`
+
+**Constraints and behavior:**
+
+- Verify that the finding belongs to the same workspace.
+- Validate response structure, length, and allowed fields before persistence.
+- Treat model output as untrusted data.
+- Never allow AI output to change finding severity, status, evidence, or deterministic risk scores without a separate validated backend operation.
+- A failed explanation must not invalidate the finding or the scan.
+- Do not persist credentials, sensitive provider responses, or unnecessary personal information in prompts or outputs.
+- Avoid logging full prompts or responses when they may contain sensitive data.
+
+### 4.15 AuditEvent
+
+**Purpose:** Provides a durable record of security-relevant actions for accountability and troubleshooting.
+
+**Table:** `audit_events`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | UUID | Yes | Primary key |
+| `workspace_id` | UUID | No | Workspace associated with the action |
+| `actor_user_id` | UUID | No | User who initiated the action |
+| `action` | VARCHAR(120) | Yes | Machine-readable action name |
+| `entity_type` | VARCHAR(100) | No | Affected entity type |
+| `entity_id` | UUID | No | Affected entity identifier |
+| `outcome` | AuditOutcome | Yes | Result of the operation |
+| `request_id` | VARCHAR(100) | No | Request correlation identifier |
+| `details` | JSONB | No | Sanitized, minimal contextual metadata |
+| `created_at` | TIMESTAMPTZ | Yes | Event time |
+
+`AuditOutcome`:
+
+- `SUCCESS`
+- `FAILURE`
+
+Record important events such as authentication outcomes, membership changes, scan initiation, finding status changes, and security configuration changes.
+
+Audit records should be append-only through normal application operations. Never record passwords, session tokens, access keys, secret values, or unrestricted request bodies.
+
+Define a retention policy before production deployment.
+
+---
+
+## 5. Entity relationships
+
+The logical relationship structure is:
+
+```text
+User ──< WorkspaceMembership >── Workspace
+                                      |
+                                      ├──< CloudAccount
+                                      |       |
+                                      |       └──< Asset
+                                      |               |
+                                      |               ├── AssetRelationship
+                                      |               └──< ScanAsset >── Scan
+                                      |                                      |
+                                      |                                      └──< Finding
+                                      |                                              |
+                                      |                                              ├──< RiskAssessment
+                                      |                                              ├──< Remediation
+                                      |                                              └──< AIExplanation
+                                      |
+                                      ├──< AssetRelationship
+                                      ├──< AttackPath
+                                      ├──< Scan
+                                      └──< AuditEvent
+
+SecurityRule ──< Finding
+```
+
+Interpretation:
+
+- A user can have memberships in multiple workspaces.
+- A workspace owns its cloud accounts, assets, scans, findings, graph data, and audit events.
+- A cloud account contains many assets.
+- A scan processes a defined set of assets.
+- A finding belongs to one originating scan and one affected asset.
+- A versioned security rule can produce findings across many scans.
+- A finding can have multiple risk assessments and remediation versions over time.
+- An asset relationship connects two assets.
+- An attack path references the assets and relationships involved in a candidate path.
+- An AI explanation is separate from the deterministic finding record.
+
+Implement workspace consistency using service validation and, where practical, database constraints. A foreign key alone does not guarantee that two referenced rows belong to the same workspace.
+
+---
+
+## 6. API-to-model mapping
+
+The shared API contract in `docs/api-design.md` remains authoritative for external JSON field names and response behavior.
+
+| API area | Primary entities |
+|---|---|
+| `POST /api/v1/auth/login` | `User`, authentication/session mechanism |
+| `POST /api/v1/auth/logout` | Authentication/session mechanism |
+| `GET /api/v1/auth/me` | `User`, `WorkspaceMembership` |
+| `GET /api/v1/assets` | `Asset`, `CloudAccount` |
+| `GET /api/v1/assets/{assetId}` | `Asset`, `CloudAccount`, `AssetRelationship` |
+| `POST /api/v1/scans` | `Scan`, `CloudAccount` |
+| `GET /api/v1/scans/{scanId}` | `Scan`, `ScanAsset` |
+| `GET /api/v1/findings` | `Finding`, current `RiskAssessment`, current `Remediation` |
+| `GET /api/v1/findings/{findingId}` | `Finding`, `SecurityRule`, `RiskAssessment`, `Remediation` |
+| `PATCH /api/v1/findings/{findingId}/status` | `Finding`, `AuditEvent` |
+| `GET /api/v1/graph/attack-paths` | `AttackPath`, `AssetRelationship`, `Asset`, `Finding` |
+| `POST /api/v1/ai/findings/{findingId}/explanation` | `AIExplanation`, `Finding` |
+
+Use dedicated request and response DTOs. Do not serialize JPA entities directly from controllers.
+
+For example, `RiskAssessment` is an internal persistence entity, while the API may expose it as a nested `risk` object. Internal table names do not have to match JSON property names.
+
+The API contract must be updated deliberately if a field, enum, or behavior changes. Do not independently rename shared fields in one feature.
+
+---
+
+## 7. Indexes, constraints, and deletion policy
+
+### Required integrity rules
+
+- Enforce foreign keys for entity relationships.
+- Enforce uniqueness for normalized user email, workspace slug, workspace membership, account external identity, rule version, and asset external identity.
+- Enforce valid enum values and numeric ranges.
+- Ensure workspace ownership consistency.
+- Validate that scan results are persisted before marking a scan completed.
+- Validate state transitions in application services.
+- Prevent unauthorized cross-workspace reads and writes.
+
+### Deletion policy
+
+- Do not hard-delete findings or scans through normal user workflows.
+- Disable users and workspaces rather than deleting them immediately.
+- Preserve audit events according to the retention policy.
+- Restrict deletion of cloud accounts or assets referenced by historical scans.
+- Use cascade deletion only for dependent records whose lifecycle is truly owned by their parent and whose removal cannot break audit or historical requirements.
+
+### Performance
+
+Start with the indexes listed for each entity. Add further indexes based on measured query patterns.
+
+Use bounded pagination for list endpoints. Avoid loading entire asset graphs, all findings, or all scan history into memory for a dashboard request.
+
+Use explicit repository queries or projections where fetching full entities would cause excessive joins or N+1 queries.
+
+---
+
+## 8. Security and multi-tenancy
+
+Every protected request must derive the user's identity from the authenticated server-side security context.
+
+Never trust a client-supplied `workspaceId` as proof of access.
+
+For every workspace-owned entity:
+
+1. Authenticate the caller.
+2. Resolve the active workspace and verify membership.
+3. Verify the required role and permission.
+4. Query or mutate the entity within the authorized workspace.
+5. Record important changes in the audit log.
+
+Also:
+
+- Return safe error responses without database internals.
+- Validate pagination limits, filter values, and JSON payload sizes.
+- Prevent insecure direct object references across workspaces.
+- Use secure password hashing and an explicit session/token strategy.
+- Keep secrets in environment configuration or a suitable secrets manager, never in source control.
+- Restrict CORS to intended frontend origins.
+- Use HTTPS in deployed environments.
+- Avoid exposing internal IDs or metadata that reveal another workspace's resources.
+
+---
+
+## 9. Implementation conventions
+
+- Use Spring Data JPA repositories for persistence.
+- Keep business logic in service classes rather than controllers.
+- Use request and response DTOs with server-side validation.
+- Use transactions around scan-result persistence and finding-status updates.
+- Use database migrations, preferably Flyway, for shared schema changes.
+- Do not introduce a migration tool and Hibernate auto-DDL as competing production schema authorities.
+- Seed synthetic demo data through an explicit, repeatable development/demo mechanism.
+- Keep production seeding separate from test fixtures.
+- Use H2 or another isolated test database for tests as appropriate, while ensuring behavior is compatible with PostgreSQL.
+- Test workspace isolation, constraints, state transitions, and failure handling.
+
+### Suggested package ownership
+
+**Nipul — scans, rules, findings, risk, dashboard data**
+
+- `scan/`
+- `rule/`
+- `finding/`
+- `risk/`
+- Related DTOs, repositories, services, tests, and API documentation.
+
+**Diksha — authentication, inventory, graph, AI**
+
+- `auth/`
+- `workspace/`
+- `asset/`
+- `cloudaccount/`
+- `graph/`
+- `ai/`
+- Related DTOs, repositories, services, tests, and API documentation.
+
+**Shared integration**
+
+- Common enums and shared DTO conventions.
+- Workspace authorization contract.
+- Database migrations.
+- Cross-feature integration tests.
+- Audit-event conventions.
+- Changes to shared entity fields or API contracts.
+
+These are ownership boundaries, not permission to change shared contracts independently.
+
+---
+
+## 10. Acceptance criteria
+
+The model is ready for implementation when:
+
+- [ ] Entity names, fields, and enums agree with `docs/api-design.md`.
+- [ ] Workspace ownership and membership authorization are defined.
+- [ ] Foreign keys, uniqueness constraints, and required indexes are documented.
+- [ ] Scan-to-asset-to-finding relationships preserve historical context.
+- [ ] Deterministic findings and AI suggestions have explicit provenance.
+- [ ] Risk assessments preserve the scoring formula version.
+- [ ] Attack paths reference validated assets and relationships.
+- [ ] Remediation and AI explanation records cannot silently alter deterministic results.
+- [ ] Audit events exclude secrets and sensitive request content.
+- [ ] Migration and test-database strategies are agreed upon.
+- [ ] Both developers review and approve the shared contract before implementing dependent features.
+
+**Implementation rule:** If implementation reveals a necessary change to this model, document the change and update the API contract where applicable before both developers depend on the new field or behavior.
