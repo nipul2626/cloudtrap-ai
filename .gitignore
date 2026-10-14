@@ -1,0 +1,37 @@
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+dist/
+coverage/
+npm-debug.log*
+
+# Java / Spring Boot / Maven
+target/
+*.class
+*.jar
+*.war
+.mvn/wrapper/maven-wrapper.jar
+
+# Python, if needed for future analysis modules
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# IDE and operating system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
