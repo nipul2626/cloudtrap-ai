@@ -5,6 +5,7 @@ import com.cloudtrap.api.identity.entity.User;
 import com.cloudtrap.api.identity.repository.UserRepository;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -79,12 +80,15 @@ class IdentityControllerIntegrationTest {
                 )
         );
 
-        MvcResult result = mockMvc.perform(
-                        post(REGISTER_ENDPOINT)
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .accept(MediaType.APPLICATION_JSON)
-                                .content(requestBody)
+
+                MvcResult result = mockMvc.perform(
+                      post(REGISTER_ENDPOINT)
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .content(requestBody)
                 )
+
                 .andExpect(status().isCreated())
                 .andExpect(content().contentTypeCompatibleWith(
                         MediaType.APPLICATION_JSON
@@ -131,12 +135,15 @@ class IdentityControllerIntegrationTest {
                 }
                 """;
 
-        MvcResult result = mockMvc.perform(
-                        post(REGISTER_ENDPOINT)
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .accept(MediaType.APPLICATION_JSON)
-                                .content(requestBody)
-                )
+
+MvcResult result = mockMvc.perform(
+        post(REGISTER_ENDPOINT)
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .content(requestBody)
+)
+
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode")
                         .value("VALIDATION_FAILED"))
@@ -148,14 +155,17 @@ class IdentityControllerIntegrationTest {
 
     @Test
     void registerShouldReturnBadRequestForMalformedJson() throws Exception {
-        MvcResult result = mockMvc.perform(
-                        post(REGISTER_ENDPOINT)
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .accept(MediaType.APPLICATION_JSON)
-                                .content("""
-                                        {"email":
-                                        """)
-                )
+
+MvcResult result = mockMvc.perform(
+        post(REGISTER_ENDPOINT)
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"email":
+                        """)
+)
+
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errorCode")
                         .value("MALFORMED_REQUEST"))
@@ -178,34 +188,40 @@ class IdentityControllerIntegrationTest {
                 )
         );
 
-        mockMvc.perform(
-                        post(REGISTER_ENDPOINT)
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .accept(MediaType.APPLICATION_JSON)
-                                .content(requestBody)
-                )
-                .andExpect(status().isCreated());
 
-        MvcResult duplicateResult = mockMvc.perform(
-                        post(REGISTER_ENDPOINT)
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .accept(MediaType.APPLICATION_JSON)
-                                .content(objectMapper.writeValueAsString(
-                                        new RegistrationPayload(
-                                                emailToCleanUp.toUpperCase(
-                                                        java.util.Locale.ROOT
-                                                ),
-                                                "StrongPass123",
-                                                "Duplicate Registration"
-                                        )
-                                ))
-                )
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.errorCode")
-                        .value("EMAIL_ALREADY_REGISTERED"))
-                .andExpect(jsonPath("$.message")
-                        .value("An account with this email address already exists"))
-                .andReturn();
+mockMvc.perform(
+        post(REGISTER_ENDPOINT)
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .content(requestBody)
+)
+        .andExpect(status().isCreated());
+
+
+
+MvcResult duplicateResult = mockMvc.perform(
+        post(REGISTER_ENDPOINT)
+                .with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(
+                        new RegistrationPayload(
+                                emailToCleanUp.toUpperCase(
+                                        java.util.Locale.ROOT
+                                ),
+                                "StrongPass123",
+                                "Duplicate Registration"
+                        )
+                ))
+)
+        .andExpect(status().isConflict())
+        .andExpect(jsonPath("$.errorCode")
+                .value("EMAIL_ALREADY_REGISTERED"))
+        .andExpect(jsonPath("$.message")
+                .value("An account with this email address already exists"))
+        .andReturn();
+
 
         assertRequestIdIsConsistent(duplicateResult);
     }
