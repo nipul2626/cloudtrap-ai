@@ -1,26 +1,50 @@
 package com.cloudtrap.api.workspace.repository;
 
 import com.cloudtrap.api.workspace.entity.Workspace;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
 import java.util.UUID;
 
-/**
- * Persistence operations for workspaces.
- *
- * Workspace authorization and business rules belong in the service layer.
- */
 public interface WorkspaceRepository
         extends JpaRepository<Workspace, UUID> {
 
-    /**
-     * Finds a workspace by its unique slug.
-     */
     Optional<Workspace> findBySlug(String slug);
 
-    /**
-     * Checks whether a workspace slug is already registered.
-     */
     boolean existsBySlug(String slug);
+
+    /**
+     * Return only workspaces for which the user has a membership.
+     * EXISTS avoids duplicate workspace rows if the data model evolves.
+     */
+    @Query(
+            value = """
+                    select w
+                    from Workspace w
+                    where exists (
+                        select m.id
+                        from WorkspaceMembership m
+                        where m.workspaceId = w.id
+                          and m.userId = :userId
+                    )
+                    """,
+            countQuery = """
+                    select count(w)
+                    from Workspace w
+                    where exists (
+                        select m.id
+                        from WorkspaceMembership m
+                        where m.workspaceId = w.id
+                          and m.userId = :userId
+                    )
+                    """
+    )
+    Page<Workspace> findAllVisibleToUser(
+            @Param("userId") UUID userId,
+            Pageable pageable
+    );
 }

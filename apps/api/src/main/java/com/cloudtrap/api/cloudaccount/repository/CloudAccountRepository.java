@@ -36,6 +36,13 @@ public interface CloudAccountRepository
             Pageable pageable
     );
 
+    Page<CloudAccount> findAllByWorkspaceIdAndProviderAndStatus(
+            UUID workspaceId,
+            CloudProvider provider,
+            CloudAccountStatus status,
+            Pageable pageable
+    );
+
     /**
      * Lists accounts for a particular provider within a workspace.
      */
