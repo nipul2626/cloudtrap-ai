@@ -30,6 +30,9 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.web.server.ResponseStatusException;
+
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -95,6 +98,54 @@ public class GlobalExceptionHandler {
                 List.of()
         );
     }
+
+@ExceptionHandler(ResponseStatusException.class)
+public ResponseEntity<ApiErrorResponse> handleResponseStatusException(
+        ResponseStatusException exception,
+        HttpServletRequest request
+) {
+    HttpStatus status = HttpStatus.valueOf(
+            exception.getStatusCode().value()
+    );
+
+    String message = exception.getReason() != null
+            ? exception.getReason()
+            : status.getReasonPhrase();
+
+    ApiErrorResponse body = new ApiErrorResponse(
+            Instant.now(),
+            status.value(),
+            status.getReasonPhrase(),
+            status.name(),
+            message,
+            request.getRequestURI(),
+            request.getHeader("X-Request-Id"),
+            List.of()
+    );
+
+    return ResponseEntity.status(status).body(body);
+}
+
+@ExceptionHandler(DataIntegrityViolationException.class)
+public ResponseEntity<ApiErrorResponse> handleDataIntegrityViolation(
+        DataIntegrityViolationException exception,
+        HttpServletRequest request
+) {
+    HttpStatus status = HttpStatus.CONFLICT;
+
+    ApiErrorResponse body = new ApiErrorResponse(
+            Instant.now(),
+            status.value(),
+            status.getReasonPhrase(),
+            "RESOURCE_CONFLICT",
+            "The operation conflicts with existing resources or constraints.",
+            request.getRequestURI(),
+            request.getHeader("X-Request-Id"),
+            List.of()
+    );
+
+    return ResponseEntity.status(status).body(body);
+}
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiErrorResponse> handleMalformedRequest(
