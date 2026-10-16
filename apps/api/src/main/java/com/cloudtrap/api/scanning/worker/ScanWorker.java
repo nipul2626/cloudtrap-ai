@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -24,13 +25,14 @@ public class ScanWorker {
     private final DeterministicRuleEngine rules;
     private final DeterministicRiskScorer scorer;
     private final Resource demoDataset;
+    private final TransactionTemplate transactionTemplate;
     private final String workerId = UUID.randomUUID().toString();
 
     public ScanWorker(JdbcTemplate jdbc, ObjectMapper mapper, DeterministicRuleEngine rules,
-                      DeterministicRiskScorer scorer,
+                      DeterministicRiskScorer scorer, TransactionTemplate transactionTemplate,
                       @Value("classpath:datasets/default-demo.json") Resource demoDataset) {
         this.jdbc = jdbc; this.mapper = mapper; this.rules = rules; this.scorer = scorer;
-        this.demoDataset = demoDataset;
+        this.demoDataset = demoDataset; this.transactionTemplate = transactionTemplate;
     }
 
     @Scheduled(fixedDelayString = "${cloudtrap.scanning.poll-delay-ms:1000}")
@@ -39,7 +41,7 @@ public class ScanWorker {
         if (job == null) return;
         UUID id = (UUID) job.get("id");
         try {
-            process(id, (UUID) job.get("workspace_id"), (String) job.get("dataset_id"));
+            transactionTemplate.executeWithoutResult(status -> {\n                try { process(id, (UUID) job.get("workspace_id"), (String) job.get("dataset_id")); }\n                catch (Exception ex) { throw new ScanProcessingException(ex); }\n            });
         } catch (Exception ex) {
             // Keep provider details and exception messages out of persisted API responses.
             retry(id, "SCAN_EXECUTION_FAILED", "The scan could not be completed. Retry the scan.");
@@ -110,7 +112,6 @@ public class ScanWorker {
                         finding.title(), finding.description(), finding.category(), finding.severity().name(), dedupe, evidence);
                 if (inserted == 1) {
                     var risk = scorer.score(finding, asset);
-                    String factors = mapper.writeValueAsString(risk.factors());
                     jdbc.update("INSERT INTO risk_assessments(id,workspace_id,finding_id,score,severity,factors,formula_version) VALUES(?,?,?,?,?,?::jsonb,?)",
                             UUID.randomUUID(), workspaceId, findingId, risk.score(), finding.severity().name(), mapper.writeValueAsString(risk.factors()), risk.formulaVersion());
                     jdbc.update("INSERT INTO remediations(id,workspace_id,finding_id,summary,steps,priority,source_type,requires_human_review) VALUES(?,?,?,?,?::jsonb,?,'RULE',TRUE)",
@@ -145,7 +146,7 @@ public class ScanWorker {
           """, code, message, id, workerId);
     }
 
-    private static String sha256(String value) {
+    private static final class ScanProcessingException extends RuntimeException {\n        private ScanProcessingException(Throwable cause) { super(cause); }\n    }\n\n    private static String sha256(String value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) { throw new IllegalStateException("SHA-256 unavailable", e); }
