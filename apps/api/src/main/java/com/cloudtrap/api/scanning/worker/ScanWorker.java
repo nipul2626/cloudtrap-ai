@@ -49,7 +49,13 @@ public class ScanWorker {
         if (job == null) return;
         UUID id = (UUID) job.get("id");
         try {
-            transactionTemplate.executeWithoutResult(status -> {\n                try { process(id, (UUID) job.get("workspace_id"), (String) job.get("dataset_id")); }\n                catch (Exception ex) { throw new ScanProcessingException(ex); }\n            });
+            transactionTemplate.executeWithoutResult(status -> {
+                try {
+                    process(id, (UUID) job.get("workspace_id"), (String) job.get("dataset_id"));
+                } catch (Exception ex) {
+                    throw new ScanProcessingException(ex);
+                }
+            });
         } catch (Exception ex) {
             // Keep provider details and exception messages out of persisted API responses.
             retry(id, "SCAN_EXECUTION_FAILED", "The scan could not be completed. Retry the scan.");
@@ -154,7 +160,13 @@ public class ScanWorker {
           """, code, message, id, workerId);
     }
 
-    private static final class ScanProcessingException extends RuntimeException {\n        private ScanProcessingException(Throwable cause) { super(cause); }\n    }\n\n    private static String sha256(String value) {
+    private static final class ScanProcessingException extends RuntimeException {
+        private ScanProcessingException(Throwable cause) {
+            super(cause);
+        }
+    }
+
+    private static String sha256(String value) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) { throw new IllegalStateException("SHA-256 unavailable", e); }
