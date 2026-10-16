@@ -34,7 +34,7 @@ public class ScanController {
                                      @RequestHeader(value="Idempotency-Key", required=false) String key,
                                      Authentication authentication) throws Exception {
         UUID userId = currentUserId(authentication);
-        requireMembership(request.workspaceId(), userId);
+        requireWriter(request.workspaceId(), userId);
         if (!"default-demo".equals(request.datasetId())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported dataset");
         }
@@ -109,7 +109,7 @@ public class ScanController {
     public Map<String,Object> updateFindingStatus(@PathVariable UUID findingId,
             @RequestParam UUID workspaceId, @Valid @RequestBody FindingStatusRequest request,
             Authentication authentication) {
-        UUID userId=currentUserId(authentication); requireMembership(workspaceId,userId);
+        UUID userId=currentUserId(authentication); requireWriter(workspaceId,userId);
         int updated=jdbc.update("""
           UPDATE findings SET status=?, resolved_at=CASE WHEN ?='RESOLVED' THEN CURRENT_TIMESTAMP ELSE NULL END,
             updated_at=CURRENT_TIMESTAMP WHERE id=? AND workspace_id=?
@@ -165,6 +165,15 @@ public class ScanController {
         List<UUID> ids=jdbc.query("SELECT id FROM users WHERE lower(email)=lower(?)", (rs,n)->rs.getObject(1,UUID.class), authentication.getName());
         if(ids.isEmpty()) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
         return ids.getFirst();
+    }
+    private void requireWriter(UUID workspaceId, UUID userId) {
+        List<String> roles=jdbc.query("""
+          SELECT m.role FROM workspaces w JOIN workspace_memberships m ON m.workspace_id=w.id
+          WHERE w.id=? AND m.user_id=?
+          """,(rs,n)->rs.getString(1),workspaceId,userId);
+        if(roles.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND,"Workspace not found");
+        if(!Set.of("OWNER","ADMIN","ANALYST").contains(roles.getFirst()))
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,"Workspace role cannot perform this action");
     }
     private void requireMembership(UUID workspaceId, UUID userId) {
         Boolean ok=jdbc.queryForObject("""
