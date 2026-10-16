@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -15,6 +16,8 @@ class CloudDiscoveryServiceTest {
     private static final String ACCOUNT_ID = "123456789012";
     private static final String COLLECTOR_ID = "aws-s3";
     private static final String COLLECTOR_VERSION = "1.0.0";
+    private static final UUID WORKSPACE_ID =
+            UUID.fromString("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
 
     @Test
     void validatesAccountBeforeCollecting() throws Exception {
@@ -68,6 +71,7 @@ class CloudDiscoveryServiceTest {
         );
 
         return new CloudProviderAdapter.CollectionRequest(
+                WORKSPACE_ID,
                 scope,
                 COLLECTOR_ID,
                 COLLECTOR_VERSION,
