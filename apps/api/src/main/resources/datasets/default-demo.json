@@ -1,0 +1,54 @@
+{
+  "datasetId": "default-demo",
+  "schemaVersion": "1.0",
+  "description": "Synthetic CloudTrap demo inventory; contains no real cloud identifiers or credentials.",
+  "assets": [
+    {
+      "externalId": "demo-storage-public-001",
+      "assetType": "storage-bucket",
+      "name": "demo-public-assets",
+      "region": "demo-region-1",
+      "exposure": "PUBLIC",
+      "criticality": 4,
+      "attributes": {
+        "encryptionEnabled": false,
+        "dataClassification": "INTERNAL"
+      }
+    },
+    {
+      "externalId": "demo-network-admin-001",
+      "assetType": "network-security-group",
+      "name": "demo-admin-ingress",
+      "region": "demo-region-1",
+      "exposure": "PUBLIC",
+      "criticality": 5,
+      "attributes": {
+        "unrestrictedAdminAccess": true,
+        "administrativePorts": ["22", "3389"]
+      }
+    },
+    {
+      "externalId": "demo-audit-001",
+      "assetType": "audit-logging",
+      "name": "demo-audit-trail",
+      "region": "demo-region-1",
+      "exposure": "PRIVATE",
+      "criticality": 4,
+      "attributes": {
+        "auditLoggingEnabled": false
+      }
+    },
+    {
+      "externalId": "demo-compute-private-001",
+      "assetType": "compute-instance",
+      "name": "demo-private-worker",
+      "region": "demo-region-1",
+      "exposure": "PRIVATE",
+      "criticality": 2,
+      "attributes": {
+        "managed": true,
+        "patchStatus": "CURRENT"
+      }
+    }
+  ]
+}
