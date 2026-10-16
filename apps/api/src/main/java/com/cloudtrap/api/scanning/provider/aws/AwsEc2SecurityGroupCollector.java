@@ -1,4 +1,3 @@
-
 package com.cloudtrap.api.scanning.provider.aws;
 
 import com.cloudtrap.api.scanning.domain.NormalizedAsset;
@@ -22,11 +21,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 
 @Component
@@ -214,7 +211,6 @@ public class AwsEc2SecurityGroupCollector {
             String region) {
 
         List<Map<String, Object>> inboundRules = new ArrayList<>();
-        Set<Integer> publicIngressPorts = new LinkedHashSet<>();
         boolean publicIngress = false;
 
         List<IpPermission> permissions = group.ipPermissions() == null
@@ -267,21 +263,20 @@ public class AwsEc2SecurityGroupCollector {
 
             publicIngress |= publicForRule;
 
-            if (publicForRule && fromPort != null && toPort != null
-                    && fromPort >= 0 && toPort >= fromPort) {
-                publicIngressPorts.add(fromPort);
-                publicIngressPorts.add(toPort);
-            }
-
             Map<String, Object> rule = new HashMap<>();
             rule.put("protocol", permission.ipProtocol());
             rule.put("fromPort", fromPort);
             rule.put("toPort", toPort);
             rule.put("ipv4Ranges", ipv4Ranges);
             rule.put("ipv6Ranges", ipv6Ranges);
+            rule.put("publicIngress", publicForRule);
 
             inboundRules.add(rule);
         }
+
+        List<Map<String, Object>> publicIngressRules = inboundRules.stream()
+                .filter(rule -> Boolean.TRUE.equals(rule.get("publicIngress")))
+                .toList();
 
         Map<String, Object> attributes = new HashMap<>();
         attributes.put("groupId", group.groupId());
@@ -291,8 +286,7 @@ public class AwsEc2SecurityGroupCollector {
         attributes.put("ownerId", safe(group.ownerId()));
         attributes.put("inboundRules", inboundRules);
         attributes.put("publicIngress", publicIngress);
-        attributes.put("publicIngressPorts",
-                new ArrayList<>(publicIngressPorts));
+        attributes.put("publicIngressRules", publicIngressRules);
 
         UUID assetId = UUID.nameUUIDFromBytes(
                 (request.workspaceId() + ":AWS:EC2:SG:" + group.groupId())
