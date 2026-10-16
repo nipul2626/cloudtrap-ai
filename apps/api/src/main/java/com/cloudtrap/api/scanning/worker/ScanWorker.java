@@ -37,6 +37,14 @@ public class ScanWorker {
 
     @Scheduled(fixedDelayString = "${cloudtrap.scanning.poll-delay-ms:1000}")
     public void poll() {
+        jdbc.update("""
+          UPDATE scans SET status='FAILED', completed_at=CURRENT_TIMESTAMP,
+            error_code='SCAN_RETRIES_EXHAUSTED',
+            safe_error_message='The scan worker stopped before completing this scan.',
+            lease_owner=NULL,lease_expires_at=NULL,updated_at=CURRENT_TIMESTAMP
+          WHERE status='RUNNING' AND lease_expires_at < CURRENT_TIMESTAMP
+            AND attempt_count >= max_attempts
+          """);
         Map<String,Object> job = claim();
         if (job == null) return;
         UUID id = (UUID) job.get("id");
@@ -56,7 +64,7 @@ public class ScanWorker {
             WHERE (status='QUEUED' AND attempt_count < max_attempts)
                OR (status='RUNNING' AND lease_expires_at < CURRENT_TIMESTAMP AND attempt_count < max_attempts)
             ORDER BY queued_at, created_at
-            FOR UPDATE SKIP LOCKED LIMIT 1
+            LIMIT 1 FOR UPDATE SKIP LOCKED
           )
           UPDATE scans s SET status='RUNNING', attempt_count=s.attempt_count+1,
             lease_owner=?, lease_expires_at=CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
