@@ -1,3 +1,4 @@
+
 package com.cloudtrap.api.scanning.provider.aws;
 
 import com.cloudtrap.api.scanning.provider.CloudProvider;
@@ -18,14 +19,19 @@ public class AwsStsCloudProviderAdapter implements CloudProviderAdapter {
 
     private final StsClient stsClient;
     private final AwsS3BucketCollector s3BucketCollector;
+    private final AwsEc2SecurityGroupCollector ec2SecurityGroupCollector;
 
     public AwsStsCloudProviderAdapter(
             StsClient stsClient,
-            AwsS3BucketCollector s3BucketCollector) {
+            AwsS3BucketCollector s3BucketCollector,
+            AwsEc2SecurityGroupCollector ec2SecurityGroupCollector) {
         this.stsClient = Objects.requireNonNull(
                 stsClient, "STS client must not be null");
         this.s3BucketCollector = Objects.requireNonNull(
                 s3BucketCollector, "S3 collector must not be null");
+        this.ec2SecurityGroupCollector = Objects.requireNonNull(
+                ec2SecurityGroupCollector,
+                "EC2 security-group collector must not be null");
     }
 
     @Override
@@ -102,9 +108,20 @@ public class AwsStsCloudProviderAdapter implements CloudProviderAdapter {
 
     @Override
     public CollectionResult collect(CollectionRequest request) {
-        Objects.requireNonNull(request, "Collection request must not be null");
+        Objects.requireNonNull(
+                request, "Collection request must not be null");
+
         request.scope().validateFor(CloudProvider.AWS);
 
-        return s3BucketCollector.collect(request);
+        return switch (request.collectorId()) {
+            case "aws-s3" ->
+                    s3BucketCollector.collect(request);
+
+            case "aws-ec2-security-groups" ->
+                    ec2SecurityGroupCollector.collect(request);
+
+            default -> throw new IllegalArgumentException(
+                    "Unsupported AWS collector ID");
+        };
     }
 }
