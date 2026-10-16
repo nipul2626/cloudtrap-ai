@@ -1,5 +1,6 @@
 package com.cloudtrap.api.scanning.provider;
 
+import java.util.UUID;
 import java.time.Duration;
 import java.util.Objects;
 
@@ -84,6 +85,7 @@ public interface CloudProviderAdapter {
      * Bounded collection request.
      */
     record CollectionRequest(
+            UUID workspaceId,
             CloudResourceScope scope,
             String collectorId,
             String collectorVersion,
@@ -91,23 +93,21 @@ public interface CloudProviderAdapter {
             int maximumAssets
     ) {
         public CollectionRequest {
+            Objects.requireNonNull(workspaceId, "workspaceId");
             Objects.requireNonNull(scope, "scope");
 
             if (collectorId == null
                     || !collectorId.matches(
-                            "[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}"
-                    )) {
+                            "[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}")) {
                 throw new IllegalArgumentException(
-                        "Invalid collector identifier"
-                );
+                        "Invalid collector identifier");
             }
 
             if (collectorVersion == null
                     || collectorVersion.isBlank()
                     || collectorVersion.length() > 40) {
                 throw new IllegalArgumentException(
-                        "Invalid collector version"
-                );
+                        "Invalid collector version");
             }
 
             collectorVersion = collectorVersion.trim();
@@ -119,14 +119,12 @@ public interface CloudProviderAdapter {
                     || timeout.compareTo(Duration.ofMinutes(30)) > 0) {
                 throw new IllegalArgumentException(
                         "Collection timeout must be greater than zero "
-                                + "and no more than 30 minutes"
-                );
+                                + "and no more than 30 minutes");
             }
 
             if (maximumAssets < 1 || maximumAssets > 100_000) {
                 throw new IllegalArgumentException(
-                        "maximumAssets must be between 1 and 100000"
-                );
+                        "maximumAssets must be between 1 and 100000");
             }
         }
     }
