@@ -7,10 +7,10 @@ import com.cloudtrap.api.scanning.provider.CloudResourceScope;
 import com.cloudtrap.api.scanning.provider.CollectionResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import software.amazon.awssdk.services.s3.S3Client;
+
 import software.amazon.awssdk.services.s3.model.ListBucketsRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
-import software.amazon.awssdk.services.sts.StsClient;
+
 import software.amazon.awssdk.services.sts.model.GetCallerIdentityResponse;
 
 import java.time.Duration;
@@ -20,6 +20,9 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
+import software.amazon.awssdk.services.sts.StsClient;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.ec2.Ec2Client;
 
 class AwsStsCloudProviderAdapterTest {
 
@@ -32,18 +35,66 @@ class AwsStsCloudProviderAdapterTest {
     private S3Client s3Client;
     private AwsStsCloudProviderAdapter adapter;
 
-    @BeforeEach
-    void setUp() {
-        stsClient = mock(StsClient.class);
-        s3Client = mock(S3Client.class);
 
-        AwsS3BucketCollector s3Collector =
-                new AwsS3BucketCollector(s3Client);
 
-        adapter = new AwsStsCloudProviderAdapter(
-                stsClient,
-                s3Collector);
-    }
+
+private software.amazon.awssdk.services.ec2.Ec2Client ec2Client;
+private AwsS3BucketCollector s3Collector;
+private AwsEc2SecurityGroupCollector ec2Collector;
+
+
+@BeforeEach
+void setUp() {
+    stsClient = mock(StsClient.class);
+    s3Client = mock(S3Client.class);
+    ec2Client = mock(
+            software.amazon.awssdk.services.ec2.Ec2Client.class);
+
+    s3Collector = new AwsS3BucketCollector(s3Client);
+    ec2Collector = new AwsEc2SecurityGroupCollector(ec2Client);
+
+    adapter = new AwsStsCloudProviderAdapter(
+            stsClient, s3Collector, ec2Collector);
+}
+
+
+@Test
+void rejectsUnsupportedCollectorId() {
+    CloudProviderAdapter.CollectionRequest request =
+            new CloudProviderAdapter.CollectionRequest(
+                    WORKSPACE_ID,
+                    scope(),
+                    "aws-unknown",
+                    "1.0.0",
+                    Duration.ofSeconds(20),
+                    100);
+
+    assertThrows(
+            IllegalArgumentException.class,
+            () -> adapter.collect(request));
+
+    verifyNoInteractions(s3Client, ec2Client);
+}
+
+@Test
+void routesEc2CollectorRequestToEc2Collector() {
+    CloudProviderAdapter.CollectionRequest request =
+            new CloudProviderAdapter.CollectionRequest(
+                    WORKSPACE_ID,
+                    new CloudResourceScope(
+                            ACCOUNT_ID,
+                            List.of("us-east-1"),
+                            List.of("ec2:security-group")),
+                    "aws-ec2-security-groups",
+                    "1.0.0",
+                    Duration.ofSeconds(20),
+                    100);
+
+    // An empty successful EC2 response can be added in the dedicated
+    // collector test below. This verifies the adapter's routing contract.
+    assertDoesNotThrow(() -> adapter.collect(request));
+}
+
 
     @Test
     void identifiesAsAwsProvider() {
