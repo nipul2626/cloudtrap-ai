@@ -1,7 +1,5 @@
-
 package com.cloudtrap.api.scanning.provider.aws;
 
-import com.cloudtrap.api.scanning.domain.NormalizedAsset;
 import com.cloudtrap.api.scanning.provider.CloudProvider;
 import com.cloudtrap.api.scanning.provider.CloudProviderAdapter;
 import com.cloudtrap.api.scanning.provider.CloudResourceScope;
@@ -13,18 +11,21 @@ import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.model.GetCallerIdentityResponse;
 import software.amazon.awssdk.services.sts.model.StsException;
 
-import java.time.Instant;
-import java.util.List;
 import java.util.Objects;
 
 @Component
 public class AwsStsCloudProviderAdapter implements CloudProviderAdapter {
 
     private final StsClient stsClient;
+    private final AwsS3BucketCollector s3BucketCollector;
 
-    public AwsStsCloudProviderAdapter(StsClient stsClient) {
+    public AwsStsCloudProviderAdapter(
+            StsClient stsClient,
+            AwsS3BucketCollector s3BucketCollector) {
         this.stsClient = Objects.requireNonNull(
                 stsClient, "STS client must not be null");
+        this.s3BucketCollector = Objects.requireNonNull(
+                s3BucketCollector, "S3 collector must not be null");
     }
 
     @Override
@@ -49,7 +50,8 @@ public class AwsStsCloudProviderAdapter implements CloudProviderAdapter {
                     ? ""
                     : exception.awsErrorDetails().errorCode();
 
-            if (status == 403 || "AccessDenied".equals(errorCode)
+            if (status == 403
+                    || "AccessDenied".equals(errorCode)
                     || "AccessDeniedException".equals(errorCode)) {
                 throw new ProviderAdapterException(
                         CollectionError.ErrorCode.PERMISSION_DENIED,
@@ -58,6 +60,7 @@ public class AwsStsCloudProviderAdapter implements CloudProviderAdapter {
             }
 
             boolean retryable = status == 429 || status >= 500;
+
             throw new ProviderAdapterException(
                     retryable
                             ? CollectionError.ErrorCode.PROVIDER_UNAVAILABLE
@@ -71,7 +74,8 @@ public class AwsStsCloudProviderAdapter implements CloudProviderAdapter {
                     "Could not reach AWS STS or resolve AWS credentials");
         }
 
-        if (identity == null || identity.account() == null
+        if (identity == null
+                || identity.account() == null
                 || identity.account().isBlank()) {
             throw new ProviderAdapterException(
                     CollectionError.ErrorCode.INVALID_PROVIDER_RESPONSE,
@@ -99,24 +103,8 @@ public class AwsStsCloudProviderAdapter implements CloudProviderAdapter {
     @Override
     public CollectionResult collect(CollectionRequest request) {
         Objects.requireNonNull(request, "Collection request must not be null");
+        request.scope().validateFor(CloudProvider.AWS);
 
-        Instant startedAt = Instant.now();
-        Instant completedAt = Instant.now();
-
-        CollectionError error = new CollectionError(
-                request.collectorId(),
-                CollectionError.ErrorCode.UNSUPPORTED_RESOURCE_TYPE,
-                false,
-                "AWS resource collection is not implemented yet");
-
-        return new CollectionResult(
-                request.collectorId(),
-                request.collectorVersion(),
-                startedAt,
-                completedAt,
-                List.<NormalizedAsset>of(),
-                CollectionResult.Coverage.FAILED,
-                List.of(error)
-        );
+        return s3BucketCollector.collect(request);
     }
 }
