@@ -109,10 +109,10 @@ public class ScanWorker {
                   """, findingId, workspaceId, scanId, actualAssetId, finding.ruleId(), finding.ruleVersion(),
                         finding.title(), finding.description(), finding.category(), finding.severity().name(), dedupe, evidence);
                 if (inserted == 1) {
-                    var risk = scorer.score(finding.severity(), asset.exposure(), criticality);
+                    var risk = scorer.score(finding, asset);
                     String factors = mapper.writeValueAsString(risk.factors());
                     jdbc.update("INSERT INTO risk_assessments(id,workspace_id,finding_id,score,severity,factors,formula_version) VALUES(?,?,?,?,?,?::jsonb,?)",
-                            UUID.randomUUID(), workspaceId, findingId, risk.score(), finding.severity().name(), factors, risk.formulaVersion());
+                            UUID.randomUUID(), workspaceId, findingId, risk.score(), finding.severity().name(), mapper.writeValueAsString(risk.factors()), risk.formulaVersion());
                     jdbc.update("INSERT INTO remediations(id,workspace_id,finding_id,summary,steps,priority,source_type,requires_human_review) VALUES(?,?,?,?,?::jsonb,?,'RULE',TRUE)",
                             UUID.randomUUID(), workspaceId, findingId, finding.remediationSummary(),
                             mapper.writeValueAsString(finding.remediationSteps()), finding.severity().name().equals("INFO") ? "LOW" : finding.severity().name());
