@@ -17,9 +17,136 @@
   --critical: #fb7185;
   --warning: #fbbf24;
   --success: #4ade80;
-  --radius: 14px;
+  --info: #60a5fa;
+
+  /* Semantic surfaces */
+  --surface-overlay: rgb(11 10 22 / 88%);
+  --surface-subtle: rgb(255 255 255 / 3%);
+  --surface-interactive: rgb(139 92 246 / 8%);
+
+  /* Semantic borders */
+  --border-subtle: rgb(162 155 185 / 12%);
+  --border-interactive: rgb(167 139 250 / 45%);
+
+  /* Typography */
+  --text-primary: var(--foreground);
+  --text-secondary: var(--muted-strong);
+  --text-tertiary: var(--muted);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Spacing scale: multiples of 4px */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Shape and elevation */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius: var(--radius-lg);
+
+  --shadow-panel: 0 8px 28px rgb(0 0 0 / 12%);
+  --shadow-overlay: 0 20px 60px rgb(0 0 0 / 28%);
+
+  /* Motion */
+  --motion-fast: 120ms;
+  --motion-standard: 180ms;
+  --motion-slow: 260ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Focus */
+  --focus-ring: 0 0 0 3px rgb(96 165 250 / 25%);
+}
+/* Stage 2: shared interaction and accessibility foundations */
+
+:where(
+  button,
+  a,
+  input,
+  select,
+  textarea,
+  [tabindex]:not([tabindex="-1"])
+):focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+  box-shadow: var(--focus-ring);
 }
 
+:where(button, a, input, select, textarea):disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+:where(button, a, input, select, textarea):focus:not(:focus-visible) {
+  outline: none;
+}
+
+.ui-button,
+.ui-icon-button,
+.ui-badge,
+.panel {
+  box-sizing: border-box;
+}
+
+.ui-button,
+.ui-icon-button {
+  transition:
+          color var(--motion-standard) var(--ease-standard),
+          background-color var(--motion-standard) var(--ease-standard),
+          border-color var(--motion-standard) var(--ease-standard),
+          transform var(--motion-fast) var(--ease-standard);
+}
+
+.ui-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ui-badge {
+  max-width: 100%;
+}
+
+/* Keep resource status treatments consistent across future screens. */
+.status-critical {
+  color: var(--critical);
+}
+
+.status-warning {
+  color: var(--warning);
+}
+
+.status-success {
+  color: var(--success);
+}
+
+.status-info {
+  color: var(--info);
+}
+
+.status-neutral {
+  color: var(--muted-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    scroll-behavior: auto;
+  }
+
+  .ui-button,
+  .ui-icon-button {
+    transition: none;
+  }
+
+  .ui-button:active:not(:disabled) {
+    transform: none;
+  }
+}
 * {
   box-sizing: border-box;
 }
