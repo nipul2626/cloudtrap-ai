@@ -1,7 +1,11 @@
 ﻿"use client";
 
 import {
+    cloneElement,
+    isValidElement,
     useId,
+    type HTMLAttributes,
+    type ReactElement,
     type ReactNode,
 } from "react";
 
@@ -18,13 +22,19 @@ export function Tooltip({
 }: TooltipProps) {
     const tooltipId = useId();
 
+    const trigger = isValidElement(children)
+        ? cloneElement(
+              children as ReactElement<HTMLAttributes<HTMLElement>>,
+              {
+                  "aria-describedby": tooltipId,
+              },
+          )
+        : <span>{children}</span>;
+
     return (
         <span className="ui-tooltip">
-            <span
-                className="ui-tooltip__trigger"
-                aria-describedby={tooltipId}
-            >
-                {children}
+            <span className="ui-tooltip__trigger">
+                {trigger}
             </span>
             <span
                 id={tooltipId}
