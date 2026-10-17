@@ -37,7 +37,7 @@ class PostgreSqlPersistenceIntegrationTest {
                 Integer.class
         );
 
-        assertThat(database).isEqualTo("cloudtrap");
+        assertThat(database).isEqualTo("cloudtrap_test");
         assertThat(successfulMigrations).isNotNull();
         assertThat(successfulMigrations).isGreaterThanOrEqualTo(1);
     }

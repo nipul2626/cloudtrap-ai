@@ -166,39 +166,48 @@ AccessDeniedHandler accessDeniedHandler =
 return http.build();
     }
 
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration configuration = new CorsConfiguration();
 
-        configuration.setAllowedOrigins(
-                Arrays.stream(allowedOrigins.split(","))
-                        .map(String::trim)
-                        .filter(origin -> !origin.isBlank())
-                        .toList()
-        );
+@Bean
+public CorsConfigurationSource corsConfigurationSource() {
+    CorsConfiguration configuration = new CorsConfiguration();
 
-        configuration.setAllowedMethods(List.of(
-                "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"
-        ));
+    configuration.setAllowedOrigins(
+            Arrays.stream(allowedOrigins.split(","))
+                    .map(String::trim)
+                    .filter(origin -> !origin.isBlank())
+                    .toList()
+    );
 
-        configuration.setAllowedHeaders(List.of(
-                "Content-Type",
-                "X-XSRF-TOKEN",
-                "X-Request-Id"
-        ));
+    configuration.setAllowedMethods(List.of(
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "OPTIONS"
+    ));
 
-        configuration.setExposedHeaders(List.of("X-Request-Id"));
-        configuration.setAllowCredentials(true);
-        configuration.setMaxAge(3600L);
+    configuration.setAllowedHeaders(List.of(
+            "Accept",
+            "Content-Type",
+            "X-XSRF-TOKEN",
+            "X-Request-Id",
+            "Idempotency-Key"
+    ));
 
-        UrlBasedCorsConfigurationSource source =
-                new UrlBasedCorsConfigurationSource();
+    configuration.setExposedHeaders(List.of("X-Request-Id"));
+    configuration.setAllowCredentials(true);
+    configuration.setMaxAge(3600L);
 
-        source.registerCorsConfiguration("/api/**", configuration);
-        source.registerCorsConfiguration("/actuator/**", configuration);
+    UrlBasedCorsConfigurationSource source =
+            new UrlBasedCorsConfigurationSource();
 
-        return source;
-    }
+    source.registerCorsConfiguration("/api/**", configuration);
+    source.registerCorsConfiguration("/actuator/**", configuration);
+
+    return source;
+}
+
 
     @Bean
     public HttpSessionEventPublisher httpSessionEventPublisher() {

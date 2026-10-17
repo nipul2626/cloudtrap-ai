@@ -3,6 +3,8 @@ package com.cloudtrap.api.scanning.worker;
 
 import com.cloudtrap.api.scanning.domain.NormalizedAsset;
 import com.cloudtrap.api.scanning.domain.RuleFinding;
+import com.cloudtrap.api.scanning.provider.CloudDiscoveryService;
+import com.cloudtrap.api.scanning.provider.CollectionResult;
 import com.cloudtrap.api.scanning.risk.DeterministicRiskScorer;
 import com.cloudtrap.api.scanning.rules.DeterministicRuleEngine;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,9 +18,11 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Component
@@ -26,7 +30,6 @@ public class ScanWorker {
 
     private static final String DEMO_DATASET_ID = "default-demo";
     private static final int MAX_DATASET_ASSETS = 5_000;
-    private static final int MAX_ATTEMPTS = 3;
     private static final int LEASE_SECONDS = 120;
 
     private final JdbcTemplate jdbc;
@@ -35,6 +38,7 @@ public class ScanWorker {
     private final DeterministicRiskScorer scorer;
     private final Resource demoDataset;
     private final TransactionTemplate transactionTemplate;
+    private final AwsScanExecutionService awsExecutionService;
     private final String workerId = UUID.randomUUID().toString();
 
     public ScanWorker(
@@ -43,14 +47,17 @@ public class ScanWorker {
             DeterministicRuleEngine rules,
             DeterministicRiskScorer scorer,
             TransactionTemplate transactionTemplate,
-            @Value("classpath:datasets/default-demo.json") Resource demoDataset
+            AwsScanExecutionService awsExecutionService,
+            @Value("classpath:datasets/default-demo.json")
+            Resource demoDataset
     ) {
-        this.jdbc = jdbc;
-        this.mapper = mapper;
-        this.rules = rules;
-        this.scorer = scorer;
-        this.transactionTemplate = transactionTemplate;
-        this.demoDataset = demoDataset;
+        this.jdbc = Objects.requireNonNull(jdbc);
+        this.mapper = Objects.requireNonNull(mapper);
+        this.rules = Objects.requireNonNull(rules);
+        this.scorer = Objects.requireNonNull(scorer);
+        this.transactionTemplate = Objects.requireNonNull(transactionTemplate);
+        this.awsExecutionService = Objects.requireNonNull(awsExecutionService);
+        this.demoDataset = Objects.requireNonNull(demoDataset);
     }
 
     @Scheduled(fixedDelayString = "${cloudtrap.scanning.poll-delay-ms:1000}")
@@ -64,18 +71,24 @@ public class ScanWorker {
 
         UUID scanId = asUuid(job.get("id"));
         UUID workspaceId = asUuid(job.get("workspace_id"));
-        String datasetId = job.get("dataset_id").toString();
+        String datasetId = Objects.toString(job.get("dataset_id"), "");
+        String source = Objects.toString(job.get("source"), "DEMO");
 
         try {
-            transactionTemplate.executeWithoutResult(transactionStatus -> {
-                try {
-                    process(scanId, workspaceId, datasetId);
-                } catch (Exception exception) {
-                    throw new ScanProcessingException(exception);
-                }
-            });
+            if ("AWS".equals(source)) {
+                executeAwsScan(scanId, workspaceId);
+            } else if ("DEMO".equals(source)) {
+                transactionTemplate.executeWithoutResult(status -> {
+                    try {
+                        processDemo(scanId, workspaceId, datasetId);
+                    } catch (Exception exception) {
+                        throw new ScanProcessingException(exception);
+                    }
+                });
+            } else {
+                throw new IllegalArgumentException("Unsupported scan source");
+            }
         } catch (Exception exception) {
-            // Persist only safe, stable error details. Never expose exception text.
             retryOrFail(
                     scanId,
                     "SCAN_EXECUTION_FAILED",
@@ -84,79 +97,116 @@ public class ScanWorker {
         }
     }
 
-    private void markExhaustedLeasesFailed() {
-        jdbc.update(
+    private void executeAwsScan(UUID scanId, UUID workspaceId)
+            throws Exception {
+
+        Integer timeoutSeconds = jdbc.queryForObject(
+                """
+                SELECT collection_timeout_seconds
+                FROM scans
+                WHERE id = ?
+                  AND workspace_id = ?
+                  AND source = 'AWS'
+                  AND status = 'RUNNING'
+                  AND lease_owner = ?
+                """,
+                Integer.class,
+                scanId,
+                workspaceId,
+                workerId
+        );
+
+        if (timeoutSeconds == null
+                || timeoutSeconds < 1
+                || timeoutSeconds > 1800) {
+            throw new IllegalStateException("Invalid AWS scan timeout");
+        }
+
+        int leaseDuration = Math.min(timeoutSeconds + 60, 1860);
+
+        int extended = jdbc.update(
                 """
                 UPDATE scans
-                SET status = 'FAILED',
-                    completed_at = CURRENT_TIMESTAMP,
-                    error_code = 'SCAN_RETRIES_EXHAUSTED',
-                    safe_error_message =
-                        'The scan worker stopped before completing this scan.',
-                    lease_owner = NULL,
-                    lease_expires_at = NULL,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE status = 'RUNNING'
-                  AND lease_expires_at < CURRENT_TIMESTAMP
-                  AND attempt_count >= max_attempts
-                """
-        );
-    }
-
-    /**
-     * Claim and lease a job in one PostgreSQL statement. SKIP LOCKED allows
-     * multiple worker instances to claim different jobs concurrently.
-     */
-    private Map<String, Object> claimNext() {
-        List<Map<String, Object>> jobs = jdbc.queryForList(
-                """
-                WITH candidate AS (
-                    SELECT id
-                    FROM scans
-                    WHERE (
-                        status = 'QUEUED'
-                        AND attempt_count < max_attempts
-                    ) OR (
-                        status = 'RUNNING'
-                        AND lease_expires_at < CURRENT_TIMESTAMP
-                        AND attempt_count < max_attempts
-                    )
-                    ORDER BY queued_at, created_at, id
-                    LIMIT 1
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE scans s
-                SET status = 'RUNNING',
-                    attempt_count = s.attempt_count + 1,
-                    lease_owner = ?,
-                    lease_expires_at =
+                SET lease_expires_at =
                         CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
-                    started_at = COALESCE(s.started_at, CURRENT_TIMESTAMP),
-                    completed_at = NULL,
-                    error_code = NULL,
-                    safe_error_message = NULL,
                     updated_at = CURRENT_TIMESTAMP
-                FROM candidate c
-                WHERE s.id = c.id
-                RETURNING s.id, s.workspace_id, s.dataset_id
+                WHERE id = ?
+                  AND workspace_id = ?
+                  AND source = 'AWS'
+                  AND status = 'RUNNING'
+                  AND lease_owner = ?
+                  AND lease_expires_at > CURRENT_TIMESTAMP
                 """,
-                workerId,
-                LEASE_SECONDS
+                leaseDuration,
+                scanId,
+                workspaceId,
+                workerId
         );
 
-        return jobs.isEmpty() ? null : jobs.getFirst();
+        if (extended != 1) {
+            throw new IllegalStateException("Scan lease was lost");
+        }
+
+        CloudDiscoveryService.DiscoveryOutcome outcome =
+                awsExecutionService.execute(scanId, workspaceId);
+
+        CollectionResult result = outcome.collectionResult();
+
+        UUID cloudAccountId = jdbc.queryForObject(
+                """
+                SELECT cloud_account_id
+                FROM scans
+                WHERE id = ?
+                  AND workspace_id = ?
+                  AND source = 'AWS'
+                  AND status = 'RUNNING'
+                  AND lease_owner = ?
+                """,
+                UUID.class,
+                scanId,
+                workspaceId,
+                workerId
+        );
+
+        if (cloudAccountId == null) {
+            throw new IllegalStateException(
+                    "AWS scan has no associated cloud account");
+        }
+
+        transactionTemplate.executeWithoutResult(status -> {
+            try {
+                requireLease(scanId);
+                persistCollectionMetadata(scanId, result);
+
+                if (result.coverage() == CollectionResult.Coverage.FAILED) {
+                    failCollection(scanId);
+                    return;
+                }
+
+                int findingsCreated = persistAssetsAndAnalyze(
+                        scanId,
+                        workspaceId,
+                        cloudAccountId,
+                        result.assets()
+                );
+
+                finishScan(
+                        scanId,
+                        result.assets().size(),
+                        findingsCreated
+                );
+            } catch (Exception exception) {
+                throw new ScanProcessingException(exception);
+            }
+        });
     }
 
-    /**
-     * This method runs inside the TransactionTemplate transaction.
-     * Any exception rolls back the inventory, findings, risk, remediation,
-     * and completion updates together.
-     */
-    private void process(
+    private void processDemo(
             UUID scanId,
             UUID workspaceId,
             String datasetId
     ) throws Exception {
+
         if (!DEMO_DATASET_ID.equals(datasetId)) {
             throw new IllegalArgumentException("Unsupported dataset");
         }
@@ -170,19 +220,17 @@ public class ScanWorker {
             throw new IllegalStateException("Dataset ID mismatch");
         }
 
-        JsonNode assets = root.path("assets");
+        JsonNode nodes = root.path("assets");
 
-        if (!assets.isArray()
-                || assets.isEmpty()
-                || assets.size() > MAX_DATASET_ASSETS) {
+        if (!nodes.isArray()
+                || nodes.isEmpty()
+                || nodes.size() > MAX_DATASET_ASSETS) {
             throw new IllegalStateException("Invalid bounded dataset");
         }
 
-        int findingsCreated = 0;
+        List<NormalizedAsset> assets = new ArrayList<>();
 
-        for (JsonNode node : assets) {
-            requireLease(scanId);
-
+        for (JsonNode node : nodes) {
             String externalId = requiredText(node, "externalId");
             String assetType = requiredText(node, "assetType");
             String name = requiredText(node, "name");
@@ -202,64 +250,175 @@ public class ScanWorker {
             }
 
             JsonNode attributesNode = node.path("attributes");
+
             if (!attributesNode.isObject()) {
-                throw new IllegalStateException("Asset attributes must be an object");
+                throw new IllegalStateException(
+                        "Asset attributes must be an object");
             }
 
+            @SuppressWarnings("unchecked")
             Map<String, Object> attributes =
                     mapper.convertValue(attributesNode, Map.class);
 
-            String attributesJson = mapper.writeValueAsString(attributes);
-
-            UUID proposedAssetId = UUID.nameUUIDFromBytes(
+            UUID assetId = UUID.nameUUIDFromBytes(
                     (workspaceId + ":DEMO:" + externalId)
                             .getBytes(StandardCharsets.UTF_8)
             );
 
-            jdbc.update(
-                    """
-                    INSERT INTO assets (
-                        id, workspace_id, provider, external_id,
-                        asset_type, name, region, exposure, criticality,
-                        normalized_attributes, last_seen_at, updated_at
-                    )
-                    VALUES (
-                        ?, ?, 'DEMO', ?, ?, ?, ?, ?, ?,
-                        ?::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-                    )
-                    ON CONFLICT (workspace_id, provider, external_id)
-                    DO UPDATE SET
-                        asset_type = EXCLUDED.asset_type,
-                        name = EXCLUDED.name,
-                        region = EXCLUDED.region,
-                        exposure = EXCLUDED.exposure,
-                        criticality = EXCLUDED.criticality,
-                        normalized_attributes = EXCLUDED.normalized_attributes,
-                        last_seen_at = CURRENT_TIMESTAMP,
-                        updated_at = CURRENT_TIMESTAMP
-                    """,
-                    proposedAssetId,
+            assets.add(new NormalizedAsset(
+                    assetId,
                     workspaceId,
+                    "DEMO",
                     externalId,
                     assetType,
                     name,
                     node.path("region").asString(null),
-                    normalizedExposure.name(),
+                    normalizedExposure,
                     criticality,
-                    attributesJson
+                    attributes
+            ));
+        }
+
+        int findingsCreated = persistAssetsAndAnalyze(
+                scanId,
+                workspaceId,
+                null,
+                assets
+        );
+
+        finishScan(scanId, assets.size(), findingsCreated);
+    }
+
+    private int persistAssetsAndAnalyze(
+            UUID scanId,
+            UUID workspaceId,
+            UUID cloudAccountId,
+            List<NormalizedAsset> assets
+    ) throws Exception {
+
+        int findingsCreated = 0;
+
+        for (NormalizedAsset proposed : assets) {
+            requireLease(scanId);
+
+            if (!workspaceId.equals(proposed.workspaceId())) {
+                throw new IllegalStateException(
+                        "Asset workspace does not match scan workspace");
+            }
+
+            String provider = proposed.provider();
+
+            if ("DEMO".equals(provider)) {
+                if (cloudAccountId != null) {
+                    throw new IllegalStateException(
+                            "DEMO assets cannot be assigned to a cloud account");
+                }
+            } else if (!"AWS".equals(provider) || cloudAccountId == null) {
+                throw new IllegalStateException(
+                        "Cloud asset provider/account mismatch");
+            }
+
+            String attributesJson =
+                    mapper.writeValueAsString(proposed.attributes());
+
+            UUID proposedAssetId = UUID.nameUUIDFromBytes(
+                    (workspaceId + ":"
+                            + (cloudAccountId == null
+                                ? "DEMO"
+                                : cloudAccountId.toString())
+                            + ":" + provider + ":" + proposed.externalId())
+                            .getBytes(StandardCharsets.UTF_8)
             );
+
+            if (cloudAccountId == null) {
+                jdbc.update(
+                        """
+                        INSERT INTO assets (
+                            id, workspace_id, cloud_account_id, provider,
+                            external_id, asset_type, name, region, exposure,
+                            criticality, normalized_attributes,
+                            last_seen_at, updated_at
+                        )
+                        VALUES (
+                            ?, ?, NULL, 'DEMO', ?, ?, ?, ?, ?, ?,
+                            ?::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        ON CONFLICT (workspace_id, provider, external_id)
+                        WHERE cloud_account_id IS NULL
+                        DO UPDATE SET
+                            asset_type = EXCLUDED.asset_type,
+                            name = EXCLUDED.name,
+                            region = EXCLUDED.region,
+                            exposure = EXCLUDED.exposure,
+                            criticality = EXCLUDED.criticality,
+                            normalized_attributes = EXCLUDED.normalized_attributes,
+                            last_seen_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        proposedAssetId,
+                        workspaceId,
+                        proposed.externalId(),
+                        proposed.assetType(),
+                        proposed.name(),
+                        proposed.region(),
+                        proposed.exposure().name(),
+                        proposed.criticality(),
+                        attributesJson
+                );
+            } else {
+                jdbc.update(
+                        """
+                        INSERT INTO assets (
+                            id, workspace_id, cloud_account_id, provider,
+                            external_id, asset_type, name, region, exposure,
+                            criticality, normalized_attributes,
+                            last_seen_at, updated_at
+                        )
+                        VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                        )
+                        ON CONFLICT (
+                            workspace_id, cloud_account_id, provider, external_id
+                        ) WHERE cloud_account_id IS NOT NULL
+                        DO UPDATE SET
+                            asset_type = EXCLUDED.asset_type,
+                            name = EXCLUDED.name,
+                            region = EXCLUDED.region,
+                            exposure = EXCLUDED.exposure,
+                            criticality = EXCLUDED.criticality,
+                            normalized_attributes = EXCLUDED.normalized_attributes,
+                            last_seen_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        proposedAssetId,
+                        workspaceId,
+                        cloudAccountId,
+                        provider,
+                        proposed.externalId(),
+                        proposed.assetType(),
+                        proposed.name(),
+                        proposed.region(),
+                        proposed.exposure().name(),
+                        proposed.criticality(),
+                        attributesJson
+                );
+            }
 
             UUID assetId = jdbc.queryForObject(
                     """
                     SELECT id
                     FROM assets
                     WHERE workspace_id = ?
-                      AND provider = 'DEMO'
+                      AND cloud_account_id IS NOT DISTINCT FROM ?
+                      AND provider = ?
                       AND external_id = ?
                     """,
                     UUID.class,
                     workspaceId,
-                    externalId
+                    cloudAccountId,
+                    provider,
+                    proposed.externalId()
             );
 
             if (assetId == null) {
@@ -280,14 +439,14 @@ public class ScanWorker {
             NormalizedAsset asset = new NormalizedAsset(
                     assetId,
                     workspaceId,
-                    "DEMO",
-                    externalId,
-                    assetType,
-                    name,
-                    node.path("region").asString(null),
-                    normalizedExposure,
-                    criticality,
-                    attributes
+                    provider,
+                    proposed.externalId(),
+                    proposed.assetType(),
+                    proposed.name(),
+                    proposed.region(),
+                    proposed.exposure(),
+                    proposed.criticality(),
+                    proposed.attributes()
             );
 
             for (RuleFinding finding : rules.evaluate(asset)) {
@@ -344,8 +503,6 @@ public class ScanWorker {
                 }
 
                 var risk = scorer.score(finding, asset);
-                String factorsJson =
-                        mapper.writeValueAsString(risk.factors());
 
                 jdbc.update(
                         """
@@ -360,7 +517,7 @@ public class ScanWorker {
                         findingId,
                         risk.score(),
                         finding.severity().name(),
-                        factorsJson,
+                        mapper.writeValueAsString(risk.factors()),
                         risk.formulaVersion()
                 );
 
@@ -381,13 +538,89 @@ public class ScanWorker {
                         workspaceId,
                         findingId,
                         finding.remediationSummary(),
-                        mapper.writeValueAsString(finding.remediationSteps()),
+                        mapper.writeValueAsString(
+                                finding.remediationSteps()),
                         priority
                 );
 
                 findingsCreated++;
             }
         }
+
+        return findingsCreated;
+    }
+
+    private void persistCollectionMetadata(
+            UUID scanId,
+            CollectionResult result
+    ) throws Exception {
+
+        List<Map<String, Object>> errors = result.errors().stream()
+                .map(error -> Map.<String, Object>of(
+                        "collectorId", error.collectorId(),
+                        "code", error.code().name(),
+                        "retryable", error.retryable(),
+                        "safeMessage", error.safeMessage()
+                ))
+                .toList();
+
+        int updated = jdbc.update(
+                """
+                UPDATE scans
+                SET collection_coverage = ?,
+                    collection_errors = ?::jsonb,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND status = 'RUNNING'
+                  AND lease_owner = ?
+                  AND lease_expires_at > CURRENT_TIMESTAMP
+                """,
+                result.coverage().name(),
+                mapper.writeValueAsString(errors),
+                scanId,
+                workerId
+        );
+
+        if (updated != 1) {
+            throw new IllegalStateException("Scan lease was lost");
+        }
+    }
+
+    private void failCollection(UUID scanId) {
+        int updated = jdbc.update(
+                """
+                UPDATE scans
+                SET status = 'FAILED',
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_code = 'CLOUD_COLLECTION_FAILED',
+                    safe_error_message =
+                        'Cloud inventory collection failed. Review collection errors before retrying.',
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    assets_discovered = 0,
+                    assets_scanned = 0,
+                    findings_created = 0,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND status = 'RUNNING'
+                  AND lease_owner = ?
+                  AND lease_expires_at > CURRENT_TIMESTAMP
+                """,
+                scanId,
+                workerId
+        );
+
+        if (updated != 1) {
+            throw new IllegalStateException("Scan lease was lost");
+        }
+    }
+
+    private void finishScan(
+            UUID scanId,
+            int assetsDiscovered,
+            int findingsCreated
+    ) {
+        requireLease(scanId);
 
         int updated = jdbc.update(
                 """
@@ -405,8 +638,8 @@ public class ScanWorker {
                   AND lease_owner = ?
                   AND lease_expires_at > CURRENT_TIMESTAMP
                 """,
-                assets.size(),
-                assets.size(),
+                assetsDiscovered,
+                assetsDiscovered,
                 findingsCreated,
                 scanId,
                 workerId
@@ -414,8 +647,7 @@ public class ScanWorker {
 
         if (updated != 1) {
             throw new IllegalStateException(
-                    "Scan lease was lost before completion"
-            );
+                    "Scan lease was lost before completion");
         }
     }
 
@@ -439,6 +671,65 @@ public class ScanWorker {
         if (!Boolean.TRUE.equals(ownsLease)) {
             throw new IllegalStateException("Scan lease was lost");
         }
+    }
+
+    private void markExhaustedLeasesFailed() {
+        jdbc.update(
+                """
+                UPDATE scans
+                SET status = 'FAILED',
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_code = 'SCAN_RETRIES_EXHAUSTED',
+                    safe_error_message =
+                        'The scan worker stopped before completing this scan.',
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE status = 'RUNNING'
+                  AND lease_expires_at < CURRENT_TIMESTAMP
+                  AND attempt_count >= max_attempts
+                """
+        );
+    }
+
+    private Map<String, Object> claimNext() {
+        List<Map<String, Object>> jobs = jdbc.queryForList(
+                """
+                WITH candidate AS (
+                    SELECT id
+                    FROM scans
+                    WHERE (
+                        status = 'QUEUED'
+                        AND attempt_count < max_attempts
+                    ) OR (
+                        status = 'RUNNING'
+                        AND lease_expires_at < CURRENT_TIMESTAMP
+                        AND attempt_count < max_attempts
+                    )
+                    ORDER BY queued_at, created_at, id
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE scans s
+                SET status = 'RUNNING',
+                    attempt_count = s.attempt_count + 1,
+                    lease_owner = ?,
+                    lease_expires_at =
+                        CURRENT_TIMESTAMP + (? * INTERVAL '1 second'),
+                    started_at = COALESCE(s.started_at, CURRENT_TIMESTAMP),
+                    completed_at = NULL,
+                    error_code = NULL,
+                    safe_error_message = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                FROM candidate c
+                WHERE s.id = c.id
+                RETURNING s.id, s.workspace_id, s.dataset_id, s.source
+                """,
+                workerId,
+                LEASE_SECONDS
+        );
+
+        return jobs.isEmpty() ? null : jobs.getFirst();
     }
 
     private void retryOrFail(
@@ -485,8 +776,7 @@ public class ScanWorker {
 
         if (value == null || value.isBlank() || value.length() > 512) {
             throw new IllegalStateException(
-                    "Dataset contains an invalid " + field
-            );
+                    "Dataset contains an invalid " + field);
         }
 
         return value.trim();
@@ -496,7 +786,6 @@ public class ScanWorker {
         if (value instanceof UUID uuid) {
             return uuid;
         }
-
         return UUID.fromString(value.toString());
     }
 
@@ -508,15 +797,12 @@ public class ScanWorker {
             );
         } catch (java.security.NoSuchAlgorithmException exception) {
             throw new IllegalStateException(
-                    "SHA-256 is unavailable",
-                    exception
-            );
+                    "SHA-256 is unavailable", exception);
         }
     }
 
     private static final class ScanProcessingException
             extends RuntimeException {
-
         private ScanProcessingException(Throwable cause) {
             super(cause);
         }
