@@ -29,7 +29,7 @@ type AppSidebarProps = {
 
 export function AppSidebar({ open, onNavigate }: AppSidebarProps) {
     return (
-        <aside className="sidebar" data-open={open}>
+        <aside id="app-sidebar" className="sidebar" data-open={open}>
             <Link
                 className="brand"
                 href="#overview"
@@ -113,3 +113,4 @@ export function AppSidebar({ open, onNavigate }: AppSidebarProps) {
         </aside>
     );
 }
+
