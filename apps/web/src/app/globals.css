@@ -1018,3 +1018,130 @@ textarea:focus-visible {
     animation: none;
   }
 }
+
+.workspace-overview {
+  margin-top: 28px;
+}
+
+.workspace-overview__panel {
+  min-width: 0;
+}
+
+.workspace-overview__label {
+  display: block;
+  margin: 20px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-overview__select {
+  width: 100%;
+  max-width: 440px;
+  min-height: 40px;
+  padding: 9px 12px;
+  color: var(--foreground);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.workspace-overview__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.workspace-overview__meta {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-overview__meta code {
+  overflow-wrap: anywhere;
+}
+
+.workspace-overview__inventory-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 26px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-overview__count {
+  color: var(--foreground);
+  font-size: 20px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-overview__loading {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.workspace-overview__asset-list {
+  display: grid;
+}
+
+.workspace-overview__asset {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-overview__asset:last-child {
+  border-bottom: 0;
+}
+
+.workspace-overview__asset-icon {
+  display: grid;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.workspace-overview__asset-main {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workspace-overview__asset-main strong {
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: 13px;
+}
+
+.workspace-overview__asset-main span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 560px) {
+  .workspace-overview__asset {
+    flex-wrap: wrap;
+  }
+
+  .workspace-overview__asset-main {
+    flex-basis: calc(100% - 54px);
+  }
+
+  .workspace-overview__asset > .ui-badge {
+    margin-left: 54px;
+  }
+}

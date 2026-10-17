@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { WorkspaceOverview } from "@/components/dashboard/workspace-overview";
 
 type IconName =
     | "shield"
@@ -437,7 +438,7 @@ export default function DashboardPage() {
               </span>
               </div>
             </section>
-
+              <WorkspaceOverview />
             <section aria-labelledby="metrics-title">
               <div className="section-heading">
                 <div>
