@@ -267,7 +267,8 @@ function MetricCard({
   icon: IconName;
 }) {
   return (
-      <article className="panel metric-card">
+      <article className="panel metric-card metric-card--animated">
+        <span className="metric-card__glow" aria-hidden="true" />
         <div className="metric-topline">
           <span className="metric-label">{label}</span>
           <span className="metric-icon">
@@ -277,7 +278,8 @@ function MetricCard({
         <div className="metric-value" aria-label={`${label}: unavailable`}>
           {value}
         </div>
-        <div className="metric-footnote">{footnote}</div>
+        <div className="metric-footnote"><span className="metric-footnote__marker" />{footnote}</div>
+        <div className="metric-bottom-line" aria-hidden="true"><span /></div>
       </article>
   );
 }
@@ -321,7 +323,9 @@ export default function DashboardPage() {
   }
 
   return (
-      <div className="app-shell">
+      <div className="app-shell app-shell--animated">
+        <div className="ambient ambient--one" aria-hidden="true" />
+        <div className="ambient ambient--two" aria-hidden="true" />
         {sidebarOpen && (
             <button
                 type="button"
@@ -348,10 +352,12 @@ export default function DashboardPage() {
               <div>
                 <div className="breadcrumb">Workspace / Overview</div>
                 <div className="topbar-title">Security Command Center</div>
+                <div className="topbar-context"><span className="topbar-context__pulse" /> Workspace intelligence</div>
               </div>
             </div>
 
             <div className="topbar-actions">
+              <span className="system-state"><span className="system-state__dot" /> Interface ready</span>
               <button
                   type="button"
                   className="secondary-button"
@@ -397,7 +403,9 @@ export default function DashboardPage() {
               </button>
             </section>
 
-            <section className="panel hero-panel" aria-labelledby="hero-title">
+            <section className="panel hero-panel reveal reveal--1" aria-labelledby="hero-title">
+              <div className="hero-grid-overlay" aria-hidden="true" />
+              <div className="hero-topline"><span className="hero-topline__mark"><Icon name="activity" size={14} /> MIDNIGHT INTELLIGENCE</span><span className="hero-topline__tag">CLOUD SECURITY / 01</span></div>
               <div className="hero-copy">
                 <div className="eyebrow">Cloud security intelligence</div>
                 <h2 className="hero-title" id="hero-title">
@@ -420,7 +428,16 @@ export default function DashboardPage() {
                   aria-label="Decorative illustration of connected cloud resources"
                   role="img"
               >
-                <div className="network-orbit" />
+                <div className="network-orbit network-orbit--outer" />
+                <div className="network-orbit network-orbit--inner" />
+                <div className="network-ring network-ring--one" />
+                <div className="network-ring network-ring--two" />
+                <span className="network-particle network-particle--one" />
+                <span className="network-particle network-particle--two" />
+                <span className="network-particle network-particle--three" />
+                <span className="network-signal">
+                  <span className="network-signal__dot" /> TOPOLOGY PREVIEW
+                </span>
                 <span className="network-node node-one">
                 <Icon name="cloud" size={17} />
               </span>
@@ -438,8 +455,8 @@ export default function DashboardPage() {
               </span>
               </div>
             </section>
-              <WorkspaceOverview />
-            <section aria-labelledby="metrics-title">
+              <div className="reveal reveal--2"><WorkspaceOverview /></div>
+            <section className="reveal reveal--3" aria-labelledby="metrics-title">
               <div className="section-heading">
                 <div>
                   <h2 className="section-title" id="metrics-title">
@@ -451,7 +468,7 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              <div className="metric-grid">
+              <div className="metric-grid metric-grid--staggered">
                 {metrics.map((metric) => (
                     <MetricCard
                         key={metric.label}
@@ -464,7 +481,7 @@ export default function DashboardPage() {
               </div>
             </section>
 
-            <section aria-labelledby="activity-title">
+            <section className="reveal reveal--4" aria-labelledby="activity-title">
               <div className="section-heading">
                 <div>
                   <h2 className="section-title" id="activity-title">
@@ -476,8 +493,8 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              <div className="activity-grid">
-                <article className="panel activity-panel" id="findings">
+              <div className="activity-grid activity-grid--staggered">
+                <article className="panel activity-panel activity-panel--findings" id="findings">
                   <div className="panel-heading">
                     <div>
                       <h3 className="panel-title">Recent findings</h3>
@@ -496,7 +513,7 @@ export default function DashboardPage() {
                   />
                 </article>
 
-                <article className="panel activity-panel" id="scan-history">
+                <article className="panel activity-panel activity-panel--scans" id="scan-history">
                   <div className="panel-heading">
                     <div>
                       <h3 className="panel-title">Scan history</h3>
@@ -517,7 +534,7 @@ export default function DashboardPage() {
               </div>
             </section>
 
-            <footer
+            <footer className="dashboard-footer"
                 style={{
                   padding: "26px 0 8px",
                   color: "var(--muted)",

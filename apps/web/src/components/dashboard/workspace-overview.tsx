@@ -23,6 +23,7 @@ export function WorkspaceOverview() {
     const [workspaceState, setWorkspaceState] = useState<LoadState>("loading");
     const [assetState, setAssetState] = useState<LoadState>("loading");
     const [errorMessage, setErrorMessage] = useState("");
+    const [assetQuery, setAssetQuery] = useState("");
 
     useEffect(() => {
         let cancelled = false;
@@ -104,9 +105,19 @@ export function WorkspaceOverview() {
     const selectedWorkspace = workspaces.find(
         (workspace) => workspace.id === selectedWorkspaceId,
     );
+    const normalizedAssetQuery = assetQuery.trim().toLocaleLowerCase();
+    const filteredAssets = normalizedAssetQuery
+        ? assets.filter((asset) => [
+            asset.name,
+            asset.external_id,
+            asset.provider,
+            asset.asset_type,
+            asset.region ?? "",
+        ].some((value) => value.toLocaleLowerCase().includes(normalizedAssetQuery)))
+        : assets;
 
     return (
-        <section className="workspace-overview" id="assets">
+        <section className="workspace-overview" id="assets" aria-label="Workspace inventory">
             <Panel className="workspace-overview__panel">
                 <PanelHeading
                     title="Workspace inventory"
@@ -196,31 +207,56 @@ export function WorkspaceOverview() {
                                 description="No asset records were returned for this workspace."
                             />
                         ) : (
-                            <div className="workspace-overview__asset-list">
-                                {assets.map((asset) => (
-                                    <article className="workspace-overview__asset" key={asset.id}>
-                    <span className="workspace-overview__asset-icon">
-                      <Icon name="cloud" size={18} />
-                    </span>
-
-                                        <div className="workspace-overview__asset-main">
-                                            <strong>{asset.name || asset.external_id}</strong>
-                                            <span>
-                        {asset.provider} · {asset.asset_type}
-                      </span>
-                                            <span>
-                        {asset.region || "Region not provided"}
-                      </span>
-                                        </div>
-
-                                        <Badge tone="neutral">
-                                            {asset.criticality == null
-                                                ? "Unrated"
-                                                : `Criticality ${asset.criticality}`}
-                                        </Badge>
-                                    </article>
-                                ))}
-                            </div>
+                            <>
+                                <div className="workspace-overview__toolbar">
+                                    <label className="workspace-overview__search" htmlFor="asset-search">
+                                        <Icon name="search" size={16} />
+                                        <input
+                                            id="asset-search"
+                                            type="search"
+                                            value={assetQuery}
+                                            onChange={(event) => setAssetQuery(event.target.value)}
+                                            placeholder="Filter by name, provider, type or region…"
+                                            autoComplete="off"
+                                        />
+                                        {assetQuery ? (
+                                            <button type="button" onClick={() => setAssetQuery("")} aria-label="Clear asset filter">
+                                                <Icon name="close" size={14} />
+                                            </button>
+                                        ) : null}
+                                    </label>
+                                    <span className="workspace-overview__result-count">
+                                        {filteredAssets.length} of {assets.length} assets
+                                    </span>
+                                </div>
+                                {filteredAssets.length === 0 ? (
+                                    <EmptyState
+                                        icon="search"
+                                        title="No matching assets"
+                                        description="Try a different name, provider, asset type or region."
+                                    />
+                                ) : (
+                                    <div className="workspace-overview__asset-list">
+                                        {filteredAssets.map((asset) => (
+                                            <article className="workspace-overview__asset" key={asset.id}>
+                                                <span className="workspace-overview__asset-icon">
+                                                    <Icon name="cloud" size={18} />
+                                                </span>
+                                                <div className="workspace-overview__asset-main">
+                                                    <strong>{asset.name || asset.external_id}</strong>
+                                                    <span>{asset.provider} · {asset.asset_type}</span>
+                                                    <span>{asset.region || "Region not provided"}</span>
+                                                </div>
+                                                <Badge tone="neutral">
+                                                    {asset.criticality == null
+                                                        ? "Unrated"
+                                                        : `Criticality ${asset.criticality}`}
+                                                </Badge>
+                                            </article>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
                         )}
                     </>
                 )}
