@@ -43,12 +43,10 @@ export function AppShell({ children }: AppShellProps) {
                 />
             )}
 
-            <div id="app-sidebar">
-                <AppSidebar
-                    open={sidebarOpen}
-                    onNavigate={closeSidebar}
-                />
-            </div>
+            <AppSidebar
+                open={sidebarOpen}
+                onNavigate={closeSidebar}
+            />
 
             <div className="main-column">
                 <AppHeader
@@ -62,3 +60,4 @@ export function AppShell({ children }: AppShellProps) {
         </div>
     );
 }
+
