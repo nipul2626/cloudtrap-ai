@@ -5,7 +5,7 @@ import type {
     CsrfResponse,
     Finding,
     LoginResponse,
-    PageResponse,
+    PageResponse, RegisterResponse,
     Scan,
     ScanFindingsResponse,
     WorkspacePageResponse,
@@ -177,6 +177,17 @@ export const api = {
         }),
 };
 
+export async function register(
+    email: string,
+    password: string,
+    displayName: string,
+): Promise<RegisterResponse> {
+    return api.post<RegisterResponse>("/api/v1/auth/register", {
+        email,
+        password,
+        displayName,
+    });
+}
 export async function login(
     email: string,
     password: string,
