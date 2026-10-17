@@ -850,3 +850,171 @@ textarea:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+
+/* Shared UI primitives */
+
+.ui-button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+          border-color 160ms ease,
+          background 160ms ease,
+          color 160ms ease,
+          transform 160ms ease;
+}
+
+.ui-button:disabled,
+.ui-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ui-button--primary {
+  border-color: rgb(167 139 250 / 45%);
+  background: linear-gradient(110deg, #6d28d9, #4f46e5);
+  color: white;
+  box-shadow: 0 5px 24px rgb(109 40 217 / 16%);
+}
+
+.ui-button--primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(110deg, #7c3aed, #5b5ce2);
+}
+
+.ui-button--secondary {
+  background: var(--surface);
+}
+
+.ui-button--secondary:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.ui-button--ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.ui-button--ghost:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.ui-button--danger {
+  border-color: rgb(251 113 133 / 35%);
+  background: rgb(251 113 133 / 10%);
+  color: #fda4af;
+}
+
+.ui-button--danger:hover:not(:disabled) {
+  background: rgb(251 113 133 / 17%);
+}
+
+.ui-icon-button {
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  cursor: pointer;
+  transition:
+          background 160ms ease,
+          border-color 160ms ease,
+          color 160ms ease;
+}
+
+.ui-icon-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--foreground);
+}
+
+.ui-button__spinner {
+  animation: ui-spin 900ms linear infinite;
+}
+
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ui-badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.ui-badge__dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ui-badge--neutral {
+  border-color: #3a354b;
+  background: #211e30;
+  color: #c4bdd8;
+}
+
+.ui-badge--info {
+  border-color: rgb(96 165 250 / 30%);
+  background: rgb(37 99 235 / 13%);
+  color: #93c5fd;
+}
+
+.ui-badge--success {
+  border-color: rgb(74 222 128 / 25%);
+  background: rgb(22 163 74 / 12%);
+  color: #86efac;
+}
+
+.ui-badge--warning {
+  border-color: rgb(251 191 36 / 30%);
+  background: rgb(217 119 6 / 12%);
+  color: #fcd34d;
+}
+
+.ui-badge--critical {
+  border-color: rgb(251 113 133 / 30%);
+  background: rgb(225 29 72 / 12%);
+  color: #fda4af;
+}
+
+.empty-state__action {
+  margin-top: 16px;
+}
+
+.skeleton--square {
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-button__spinner {
+    animation: none;
+  }
+}
